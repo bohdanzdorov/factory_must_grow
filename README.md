@@ -33,4 +33,12 @@ Requires Node.js 22.13+ and Docker Desktop.
    npm run db:deploy
    ```
 
-Run commands for the API and demo will be added as those parts are built.
+4. Start the API on `http://localhost:4000`:
+
+   ```bash
+   npm run dev
+   ```
+
+5. Check it at `http://localhost:4000/health`.
+
+Run commands for the demo will be added as those parts are built.

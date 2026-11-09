@@ -11,6 +11,7 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "npm run dev -w @factorymustgrow/backend",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
