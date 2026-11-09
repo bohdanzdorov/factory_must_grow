@@ -1,0 +1,10 @@
+{
+  "name": "factorymustgrow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-site manufacturing order routing that stays correct when a machine fails.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}
