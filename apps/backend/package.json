@@ -4,9 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:generate": "prisma generate"
   },
   "dependencies": {
-    "@factorymustgrow/shared": "*"
+    "@factorymustgrow/shared": "*",
+    "@prisma/client": "7.10.1",
+    "dotenv": "17.4.2"
+  },
+  "devDependencies": {
+    "prisma": "7.10.1"
   }
 }

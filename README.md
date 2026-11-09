@@ -16,8 +16,21 @@ Routes orders across a network of factories and stays correct when a machine fai
 
 ## Getting started
 
-```bash
-npm install
-```
+Requires Node.js 22.13+ and Docker Desktop.
 
-Run commands for the database, API and demo will be added as those parts are built.
+1. Install dependencies:
+
+   ```bash
+   npm install
+   ```
+
+2. Copy `apps/backend/.env.example` to `apps/backend/.env`.
+
+3. Start PostgreSQL (exposed on `localhost:5433`) and apply migrations:
+
+   ```bash
+   npm run db:up
+   npm run db:deploy
+   ```
+
+Run commands for the API and demo will be added as those parts are built.
