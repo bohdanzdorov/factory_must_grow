@@ -3,8 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "description": "Multi-site manufacturing order routing that stays correct when a machine fails.",
+  "engines": {
+    "node": ">=22.13"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
-  ]
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc -p apps/backend && tsc -p apps/frontend && tsc -p apps/simulator && tsc -p packages/shared"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0",
+    "typescript-eslint": "^8.72.1"
+  }
 }

@@ -6,13 +6,13 @@ Routes orders across a network of factories and stays correct when a machine fai
 
 ## Repository layout
 
-| Path | Purpose |
-| --- | --- |
-| `apps/backend` | Express API, routing and failure handling |
-| `apps/frontend` | React operator UI |
-| `apps/simulator` | Machine simulator |
-| `packages/shared` | Zod schemas and types shared by the apps |
-| `docs` | Design notes |
+| Path              | Purpose                                   |
+| ----------------- | ----------------------------------------- |
+| `apps/backend`    | Express API, routing and failure handling |
+| `apps/frontend`   | React operator UI                         |
+| `apps/simulator`  | Machine simulator                         |
+| `packages/shared` | Zod schemas and types shared by the apps  |
+| `docs`            | Design notes                              |
 
 ## Getting started
 
