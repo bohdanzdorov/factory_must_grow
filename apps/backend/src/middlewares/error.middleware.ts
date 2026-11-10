@@ -1,4 +1,6 @@
+import type { ErrorResponse } from '@factorymustgrow/shared';
 import type { NextFunction, Request, Response } from 'express';
+import { ZodError } from 'zod';
 import { HttpError } from '../errors/http-error.js';
 
 interface ExposableClientError extends Error {
@@ -25,16 +27,32 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
     return;
   }
 
+  if (err instanceof ZodError) {
+    sendError(res, 400, {
+      message: 'Invalid request',
+      issues: err.issues.map((issue) => ({
+        path: issue.path.map(String).join('.'),
+        message: issue.message,
+      })),
+    });
+    return;
+  }
+
   if (err instanceof HttpError) {
-    res.status(err.statusCode).json({ error: { message: err.message } });
+    sendError(res, err.statusCode, { message: err.message });
     return;
   }
 
   if (isExposableClientError(err)) {
-    res.status(err.status).json({ error: { message: err.message } });
+    sendError(res, err.status, { message: err.message });
     return;
   }
 
   req.log.error({ err }, 'Unhandled error');
-  res.status(500).json({ error: { message: 'Internal server error' } });
+  sendError(res, 500, { message: 'Internal server error' });
+}
+
+function sendError(res: Response, status: number, error: ErrorResponse['error']): void {
+  const body: ErrorResponse = { error };
+  res.status(status).json(body);
 }

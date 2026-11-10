@@ -3,7 +3,9 @@
   "compilerOptions": {
     "noEmit": false,
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    // Use the compiled shared package, so its source is not pulled into this build.
+    "customConditions": []
   },
   "include": ["src"]
 }

@@ -3,5 +3,7 @@
   "compilerOptions": {
     "types": ["node"]
   },
+  // Everything in src is typechecked, including src/checks/enum-sync.ts,
+  // which fails `npm run typecheck` when shared enums drift from Prisma's.
   "include": ["src", "prisma.config.ts"]
 }
