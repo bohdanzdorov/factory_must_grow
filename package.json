@@ -20,7 +20,8 @@
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "db:migrate": "npm run db:migrate -w @factorymustgrow/backend --",
-    "db:deploy": "npm run db:deploy -w @factorymustgrow/backend"
+    "db:deploy": "npm run db:deploy -w @factorymustgrow/backend",
+    "db:seed": "npm run db:seed -w @factorymustgrow/backend"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
