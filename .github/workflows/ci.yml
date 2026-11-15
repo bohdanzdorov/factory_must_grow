@@ -36,6 +36,8 @@ jobs:
     # Throwaway values for the CI database above; not secrets.
     env:
       DATABASE_URL: postgresql://factory:factory_ci@localhost:5432/factorymustgrow
+      # Tests create this database themselves and empty it before each test.
+      TEST_DATABASE_URL: postgresql://factory:factory_ci@localhost:5432/factorymustgrow_test
       NODE_ENV: test
 
     steps:
@@ -73,3 +75,6 @@ jobs:
 
       - name: Seed database
         run: npm run db:seed
+
+      - name: Test
+        run: npm test

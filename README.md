@@ -46,4 +46,16 @@ Requires Node.js 22.13+ and Docker Desktop.
 
 5. Check it at `http://localhost:4000/health`, or list the seeded sites at `http://localhost:4000/api/sites`.
 
+## Running tests
+
+With PostgreSQL running (`npm run db:up`):
+
+```bash
+npm test
+```
+
+Tests use a separate database, `factorymustgrow_test`, which they create and migrate automatically. Every table is emptied before each test, so your development data is never touched. To point tests at another database, set `TEST_DATABASE_URL`; its name must end in `_test`.
+
+Use `npm run test:watch -w @factorymustgrow/backend` to rerun tests on every change. Test files live in `apps/backend/test/`.
+
 Run commands for the demo will be added as those parts are built.
