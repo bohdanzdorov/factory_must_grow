@@ -17,13 +17,14 @@ export function toOrder(record: OrderRecord): Order {
   };
 }
 
-// Validated request → what the model stores.
-export function toNewOrder(input: CreateOrderInput): NewOrder {
+// Validated request → what the model stores. `now` is simulated time from the clock.
+export function toNewOrder(input: CreateOrderInput, now: Date): NewOrder {
   return {
     partName: input.partName,
     quantity: input.quantity,
     requiredCapabilities: input.requiredCapabilities,
     deadline: new Date(input.deadline),
     destination: input.destination,
+    createdAt: now,
   };
 }

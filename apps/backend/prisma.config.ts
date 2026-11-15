@@ -5,7 +5,8 @@ export default defineConfig({
   schema: 'prisma/schema.prisma',
   migrations: {
     path: 'prisma/migrations',
-    seed: 'tsx prisma/seed.ts',
+    // Same condition as `npm run dev`, so the seed uses shared's source, not a stale build.
+    seed: 'tsx --conditions=development prisma/seed.ts',
   },
   datasource: {
     url: env('DATABASE_URL'),

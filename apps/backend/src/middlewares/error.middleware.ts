@@ -39,7 +39,10 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
   }
 
   if (err instanceof HttpError) {
-    sendError(res, err.statusCode, { message: err.message });
+    sendError(res, err.statusCode, {
+      message: err.message,
+      ...(err.issues ? { issues: err.issues } : {}),
+    });
     return;
   }
 

@@ -7,6 +7,7 @@ export interface NewOrder {
   requiredCapabilities: Capability[];
   deadline: Date;
   destination: string;
+  createdAt: Date;
 }
 
 export function ordersModel(db: DbClient) {

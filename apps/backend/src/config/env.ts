@@ -6,6 +6,8 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   LOG_LEVEL: z.enum(['silent', 'fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   DATABASE_URL: z.string().min(1),
+  // Simulated milliseconds per real millisecond. At 60, a 30-minute job takes 30 seconds.
+  CLOCK_SCALE: z.coerce.number().positive().default(60),
 });
 
 const parsed = envSchema.safeParse(process.env);

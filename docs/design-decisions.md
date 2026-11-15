@@ -84,6 +84,18 @@ If any step fails, everything rolls back and no acknowledgement is sent, so the 
 - `FAIL` is best-effort and sent only to `RUNNING` machines, because a site that is really down cannot receive commands.
 - `Site.status` stays the gate for routing, so a machine's heartbeat cannot make it available while its site is down.
 
+## Time
+
+The demo runs on a simulated clock that is faster than real time, set by `CLOCK_SCALE` (default 60, so a 30-minute job takes 30 real seconds). It starts at the real time when the process starts.
+
+- **The rule: anything stored or compared uses simulated time.** That covers deadlines, planned job times, `createdAt`, `receivedAt` and `lastHeartbeatAt`, plus every comparison: deadlines, dispatching, expiry and heartbeat timeouts.
+- **Real time is used only for** how often background loops run, and for log timestamps.
+- Database columns have no `now()` defaults, so the app always passes `clock.now()`. A forgotten time is a type error, not a silently wrong value.
+- A heartbeat timeout is defined in heartbeats (for example, 3 missed) and converted to simulated time with the scale, so the comparison uses two simulated times.
+- "Deadline must be in the future" is checked in the backend with the clock, not in the shared schema, which only checks the date's format.
+- **A restart moves the clock back** to the current real time, so jobs planned far ahead can end up far in the future. Reseed with `npm run db:seed` after restarting. Saving the clock's start in the database would avoid this, but is left out of v1 to keep it simple.
+- Tests replace the clock with a manual one that only moves when the test moves it.
+
 ## Still open
 
 - **Multi-capability cycle time (W2-01):** the suggested approach is to add up the machine's cycle times for each required capability.

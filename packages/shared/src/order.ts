@@ -23,11 +23,8 @@ export const CreateOrderSchema = z.object({
     .refine((capabilities) => new Set(capabilities).size === capabilities.length, {
       message: 'Capabilities must not repeat',
     }),
-  deadline: z.iso
-    .datetime({ offset: true })
-    .refine((deadline) => new Date(deadline).getTime() > Date.now(), {
-      message: 'Deadline must be in the future',
-    }),
+  // The backend also checks that the deadline is in the future, using simulated time.
+  deadline: z.iso.datetime({ offset: true }),
   // The backend also checks that shipping times exist for this destination.
   destination: z.string().trim().min(1).max(100),
 });

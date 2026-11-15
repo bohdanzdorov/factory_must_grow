@@ -1,4 +1,5 @@
 // Replaces all data with the seed in prisma/seed-data.ts. Run with `npm run db:seed`.
+import { getClock } from '../src/config/clock.js';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/config/prisma.js';
 import { machines, orders, shippingDays, sites } from './seed-data.js';
@@ -10,7 +11,8 @@ if (env.NODE_ENV === 'production') {
   process.exit(1);
 }
 
-const now = Date.now();
+// Simulated time; it equals real time here, because the clock starts with this process.
+const now = getClock().now().getTime();
 
 try {
   await prisma.$transaction(async (tx) => {
@@ -44,6 +46,7 @@ try {
       data: orders.map(({ daysUntilDeadline, ...order }) => ({
         ...order,
         deadline: new Date(now + daysUntilDeadline * DAY_MS),
+        createdAt: new Date(now),
       })),
     });
   });

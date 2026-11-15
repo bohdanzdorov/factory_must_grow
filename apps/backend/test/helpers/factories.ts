@@ -1,5 +1,6 @@
 // Create test rows directly in the database. Every field has a default, so a test
 // only states what matters to it.
+import { getClock } from '../../src/config/clock.js';
 import { prisma } from '../../src/config/prisma.js';
 import type {
   Capability,
@@ -71,13 +72,16 @@ export function createOrder(
     createdAt?: Date;
   } = {},
 ) {
+  const now = getClock().now();
+
   return prisma.order.create({
     data: {
       partName: 'Test part',
       quantity: 10,
       requiredCapabilities: ['MILLING_3_AXIS'],
-      deadline: new Date(Date.now() + 7 * DAY_MS),
+      deadline: new Date(now.getTime() + 7 * DAY_MS),
       destination: 'DE',
+      createdAt: now,
       ...overrides,
     },
   });

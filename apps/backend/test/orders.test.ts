@@ -1,6 +1,8 @@
 import { ErrorResponseSchema, OrderSchema } from '@factorymustgrow/shared';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { getClock } from '../src/config/clock.js';
 import { api } from './helpers/api.js';
+import { useManualClock } from './helpers/clock.js';
 import { createOrder, createShippingLeadTime, createSite } from './helpers/factories.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -10,7 +12,7 @@ function validOrder() {
     partName: 'Bracket',
     quantity: 10,
     requiredCapabilities: ['MILLING_5_AXIS'],
-    deadline: new Date(Date.now() + 7 * DAY_MS).toISOString(),
+    deadline: new Date(getClock().now().getTime() + 7 * DAY_MS).toISOString(),
     destination: 'DE',
   };
 }
@@ -48,7 +50,7 @@ describe('POST /api/orders', () => {
         partName: '',
         quantity: 0,
         requiredCapabilities: ['TURNING', 'TURNING'],
-        deadline: new Date(Date.now() - DAY_MS).toISOString(),
+        deadline: 'next Tuesday',
         destination: 'DE',
       });
 
@@ -60,6 +62,30 @@ describe('POST /api/orders', () => {
       'requiredCapabilities',
       'deadline',
     ]);
+  });
+
+  it('rejects a deadline that has passed in simulated time', async () => {
+    // Simulated time is 30 days ahead of real time, so a deadline 7 real days away is past.
+    const realNow = Date.now();
+    useManualClock(new Date(realNow + 30 * DAY_MS));
+
+    const res = await api()
+      .post('/api/orders')
+      .send({ ...validOrder(), deadline: new Date(realNow + 7 * DAY_MS).toISOString() });
+
+    expect(res.status).toBe(400);
+    expect(ErrorResponseSchema.parse(res.body).error.issues).toEqual([
+      { path: 'deadline', message: 'Deadline must be in the future' },
+    ]);
+  });
+
+  it('records the creation time from the simulated clock', async () => {
+    useManualClock(new Date('2030-06-01T08:00:00Z'));
+
+    const res = await api().post('/api/orders').send(validOrder());
+
+    expect(res.status).toBe(201);
+    expect(OrderSchema.parse(res.body).createdAt).toBe('2030-06-01T08:00:00.000Z');
   });
 
   it('rejects a missing body', async () => {

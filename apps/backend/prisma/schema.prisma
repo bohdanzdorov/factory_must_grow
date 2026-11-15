@@ -162,7 +162,7 @@ model Order {
   destination          String
   status               OrderStatus  @default(DRAFT)
   blockedReason        String?      @map("blocked_reason")
-  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdAt            DateTime     @map("created_at") @db.Timestamptz(3)
 
   routingDecisions RoutingDecision[]
 
@@ -194,7 +194,7 @@ model RoutingDecision {
   kind            RoutingDecisionKind
   status          RoutingDecisionStatus @default(PROPOSED)
   supersedesId    String?               @map("supersedes_id")
-  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdAt       DateTime              @map("created_at") @db.Timestamptz(3)
 
   order         Order              @relation(fields: [orderId], references: [id])
   chosenMachine Machine?           @relation(fields: [chosenMachineId], references: [id])
@@ -235,7 +235,7 @@ model MachineEvent {
   seq        BigInt
   type       MachineEventType
   payload    Json
-  receivedAt DateTime         @default(now()) @map("received_at") @db.Timestamptz(3)
+  receivedAt DateTime         @map("received_at") @db.Timestamptz(3)
 
   machine Machine @relation(fields: [machineId], references: [id])
 
@@ -249,7 +249,7 @@ model Command {
   type      CommandType
   payload   Json
   status    CommandStatus @default(PENDING)
-  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdAt DateTime      @map("created_at") @db.Timestamptz(3)
 
   machine Machine @relation(fields: [machineId], references: [id])
 

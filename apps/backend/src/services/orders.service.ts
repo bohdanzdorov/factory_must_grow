@@ -1,4 +1,5 @@
 import type { CreateOrderInput, ListOrdersQuery, Order } from '@factorymustgrow/shared';
+import { getClock } from '../config/clock.js';
 import { db } from '../config/database.js';
 import { HttpError } from '../errors/http-error.js';
 import { toNewOrder, toOrder } from '../mappers/order.mapper.js';
@@ -20,13 +21,21 @@ export async function getOrder(id: string): Promise<Order> {
 }
 
 export async function createOrder(input: CreateOrderInput): Promise<Order> {
+  const now = getClock().now();
+
+  // Checked here rather than in the shared schema, because "now" is simulated time.
+  if (new Date(input.deadline) <= now) {
+    throw new HttpError(400, 'Invalid request', [
+      { path: 'deadline', message: 'Deadline must be in the future' },
+    ]);
+  }
+
   // Business rule: routing needs a shipping time to this destination.
   if (!(await db.shippingLeadTimes.destinationExists(input.destination))) {
     throw new HttpError(400, `Unknown destination: ${input.destination}`);
   }
 
-  const newOrder = toNewOrder(input);
-  const record = await db.orders.insert(newOrder);
+  const record = await db.orders.insert(toNewOrder(input, now));
 
   return toOrder(record);
 }
