@@ -1,5 +1,7 @@
 # Factory Must Grow
 
+[![CI](https://github.com/bohdanzdorov/factory_must_grow/actions/workflows/ci.yml/badge.svg)](https://github.com/bohdanzdorov/factory_must_grow/actions/workflows/ci.yml)
+
 Routes orders across a network of factories and stays correct when a machine fails: no double-booking, no lost jobs, and human approval for every routing decision.
 
 > Work in progress. This is an independent personal project.
