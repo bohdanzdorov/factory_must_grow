@@ -79,6 +79,7 @@ enum CandidateRejectionReason {
   SITE_DOWN
   MISSES_DEADLINE
   REJECTED_BY_OPERATOR
+  NO_SHIPPING_ROUTE
 
   @@map("candidate_rejection_reason")
 }

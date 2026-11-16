@@ -74,5 +74,5 @@ All orders start as `DRAFT`. Deadlines are relative to when the seed runs, so th
 
 **Orders worth watching:**
 
-- **Flange adapter** and **Valve body** need turning and 3-axis milling together, so only `LON-TURNMILL-1` can make them. Their cycle time depends on how multi-capability orders are calculated, which is still open (see [design-decisions.md](design-decisions.md)).
+- **Flange adapter** and **Valve body** need turning and 3-axis milling together, so only `LON-TURNMILL-1` can make them. Their cycle times add up: 7 + 11 = 18 minutes per part (see [design-decisions.md](design-decisions.md)).
 - **Spacer ring** has a tight deadline, but it fits on London's lathe with 1 day of shipping to GB.

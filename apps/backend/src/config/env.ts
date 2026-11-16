@@ -8,6 +8,9 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   // Simulated milliseconds per real millisecond. At 60, a 30-minute job takes 30 seconds.
   CLOCK_SCALE: z.coerce.number().positive().default(60),
+  // Real seconds an operator has to approve a proposal. Routing never plans a job to start
+  // sooner, so a proposal cannot expire while someone is reading it.
+  APPROVAL_WINDOW_SECONDS: z.coerce.number().int().positive().default(120),
 });
 
 const parsed = envSchema.safeParse(process.env);

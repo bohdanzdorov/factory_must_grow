@@ -32,7 +32,14 @@ Decisions made while designing the domain schema (W1-04). They refine or overrid
 
 ## Routing
 
+Implemented as a pure function, `routeOrder` in `apps/backend/src/domain/routing.ts`: it reads nothing from the database or the clock, so the same input always gives the same decision.
+
 - Earliest start is the **earliest gap long enough for the job**, not the end of the last reservation as the plan says. This lets freed slots be reused.
+- **No job starts before `now + approval window`.** The window is `APPROVAL_WINDOW_SECONDS` real seconds (default 120), converted to simulated time with the clock scale, so 120 simulated minutes at 60x. Without it, a proposal would expire while the operator reads it.
+- **Production time** is quantity × the sum of the machine's cycle times for every required capability, because the operations run one after another.
+- **Each machine gets the first rejection reason that applies**, in this order: rejected by the operator, missing a capability, site down, machine in `ERROR` or `OFFLINE`, no shipping route to the destination, misses the deadline. A machine that is `RUNNING` is still a candidate; its bookings decide when it is free.
+- **Ranking:** most slack (deadline minus arrival), then the least loaded site, then machine id. Site load is the total booked minutes still ahead on the site's machines, so a 10-hour job counts more than a 10-minute one.
+- Machines that miss the deadline keep their timing in the decision, so the explanation can say how late they would be.
 - Machines already rejected for an order are excluded when that order is routed again, with the rejection reason `REJECTED_BY_OPERATOR`.
 - A failed routing attempt still stores a decision with its candidates and reasons, using `NO_ELIGIBLE_MACHINE`.
 - When a blocked order is retried, a new decision is stored only if a machine is found.
@@ -98,5 +105,4 @@ The demo runs on a simulated clock that is faster than real time, set by `CLOCK_
 
 ## Still open
 
-- **Multi-capability cycle time (W2-01):** the suggested approach is to add up the machine's cycle times for each required capability.
 - **`ACKED` triggers for `RESET` and `CANCEL_JOB` (W3):** the plan has no event type confirming either one.
