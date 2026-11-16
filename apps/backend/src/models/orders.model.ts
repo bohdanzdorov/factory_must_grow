@@ -15,7 +15,8 @@ export function ordersModel(db: DbClient) {
     findMany(filter: { status?: OrderStatus }): Promise<Order[]> {
       return db.order.findMany({
         where: { status: filter.status },
-        orderBy: { createdAt: 'desc' },
+        // id breaks ties, so orders created at the same moment keep a stable order.
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       });
     },
 

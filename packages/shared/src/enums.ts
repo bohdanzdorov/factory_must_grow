@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // These must match the enums in apps/backend/prisma/schema.prisma.
-// apps/backend/src/models/enum-sync.ts fails typechecking if they drift apart.
+// apps/backend/src/checks/enum-sync.ts fails typechecking if they drift apart.
 
 export const CapabilitySchema = z.enum([
   'MILLING_3_AXIS',

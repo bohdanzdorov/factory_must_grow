@@ -129,6 +129,24 @@ describe('GET /api/orders', () => {
     ).toEqual(['Newer', 'Older']);
   });
 
+  it('keeps a stable order when orders share a creation time', async () => {
+    const createdAt = new Date('2026-01-01T00:00:00Z');
+    const created = await Promise.all(
+      ['A', 'B', 'C', 'D', 'E'].map((partName) => createOrder({ partName, createdAt })),
+    );
+    const expectedIds = created.map((order) => order.id).sort();
+
+    const first = await api().get('/api/orders');
+    const second = await api().get('/api/orders');
+
+    expect(
+      OrderSchema.array()
+        .parse(first.body)
+        .map((order) => order.id),
+    ).toEqual(expectedIds);
+    expect(second.body).toEqual(first.body);
+  });
+
   it('filters by status', async () => {
     await createOrder({ partName: 'Draft' });
     await createOrder({ partName: 'Blocked', status: 'BLOCKED' });
