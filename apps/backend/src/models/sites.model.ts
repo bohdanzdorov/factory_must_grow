@@ -14,6 +14,10 @@ export function sitesModel(db: DbClient) {
       return db.site.findMany({ orderBy: { id: 'asc' } });
     },
 
+    findById(id: string): Promise<Site | null> {
+      return db.site.findUnique({ where: { id } });
+    },
+
     findByIdWithMachines(id: string): Promise<SiteDetailRecord | null> {
       return db.site.findUnique({ where: { id }, include: siteDetailInclude });
     },

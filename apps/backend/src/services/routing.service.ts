@@ -96,7 +96,13 @@ async function routeOnce(tx: Models, orderId: string): Promise<OrderDecisionResu
     candidates: toNewCandidates(result),
   });
 
-  if (chosen?.earliestStart && chosen.finishAt) {
+  if (chosen) {
+    // A chosen machine always has a slot. If not, routing has a bug: fail loudly rather than
+    // save a proposal that books nothing.
+    if (!chosen.earliestStart || !chosen.finishAt) {
+      throw new Error(`Routing chose ${chosen.machineId} without a time slot`);
+    }
+
     // Fails with a job_no_overlap error if another request took this slot meanwhile.
     await tx.jobs.insert({
       routingDecisionId: decision.id,

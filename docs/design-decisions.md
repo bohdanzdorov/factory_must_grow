@@ -92,7 +92,10 @@ Implemented as a pure function, `routeOrder` in `apps/backend/src/domain/routing
 
 - **Rejecting requires a reason** (1–500 characters), saved as `rejectionNote` on the decision. It is the operator's own words, separate from the machine-level rejection reasons on candidates.
 - **Approving after the job's planned start has passed** expires the proposal on the spot and returns 409. The expiry is saved even though the request fails: the transaction returns an "expired" result, and the 409 is raised only after it commits. The background sweep (W3-09) does the same for proposals nobody touches.
+- **Approval rechecks what it confirms.** It returns 409, and changes nothing, if the proposal has no booked (`PLANNED`) job, if the booked machine is now `ERROR` or `OFFLINE`, or if its site is `DOWN` (rule 3). The operator then rejects the proposal and routes the order again. A `RUNNING` machine is fine: it is only busy with other work.
+- **Routing fails loudly** if it ever chose a machine without a time slot, instead of saving a proposal that books nothing.
 - **Repeating the same action is harmless:** approving an approved decision, or rejecting a rejected one, returns 200 with the current state. The first rejection reason is kept. A conflicting action, such as approving a rejected decision, returns 409.
+- **An order's current decision is its newest one.** After an approved reroute, an order has two `APPROVED` decisions: the original, whose job is now `RELEASED`, and the reroute. Both are historically true, so neither is changed; screens show the newest decision as current and the rest as history.
 - **Two layers stop approve and reject from both winning:** the order row is locked for the whole transaction, and the decision only changes if its status is still the one that was read. Removing both lets a concurrent approve and reject both succeed; a test runs six such races at once to catch that.
 
 ## Status changes

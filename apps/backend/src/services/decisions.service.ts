@@ -28,6 +28,9 @@ export async function approveDecision(decisionId: string): Promise<OrderDecision
       return { kind: 'expired' };
     }
 
+    // Approving must never confirm work with no slot, or on a machine that broke since.
+    await requireBookedOnAvailableMachine(tx, decision);
+
     await changeDecisionStatus(tx, decision, 'APPROVED');
     const approvedOrder = await changeOrderStatus(tx, order, 'APPROVED');
 
@@ -99,6 +102,43 @@ function requireProposed(decision: RoutingDecisionRecord, action: string): void 
     throw new HttpError(
       409,
       `Decision ${decision.id} is ${decision.status}; only PROPOSED decisions can be ${action}.`,
+    );
+  }
+}
+
+// The proposal must still hold a booked slot (rule 8: no approved order without one), and its
+// machine and site must still be able to take work (rule 3). The machine may have failed after
+// routing; the operator then rejects the proposal and routes the order again.
+async function requireBookedOnAvailableMachine(
+  tx: Models,
+  decision: RoutingDecisionRecord,
+): Promise<void> {
+  const job = decision.jobs.find((candidate) => candidate.status === 'PLANNED');
+  if (!job) {
+    throw new HttpError(
+      409,
+      `Decision ${decision.id} has no booked slot; reject it and route the order again.`,
+    );
+  }
+
+  const machine = await tx.machines.findById(job.machineId);
+  const site = machine ? await tx.sites.findById(machine.siteId) : null;
+  if (!machine || !site) {
+    throw new Error(`Machine ${job.machineId} of job ${job.id} or its site does not exist`);
+  }
+
+  if (machine.status === 'ERROR' || machine.status === 'OFFLINE') {
+    throw new HttpError(
+      409,
+      `Machine ${machine.id} is ${machine.status}, so this proposal can't be approved. ` +
+        'Reject it and route the order again.',
+    );
+  }
+  if (site.status !== 'UP') {
+    throw new HttpError(
+      409,
+      `Site ${site.id} is ${site.status}, so this proposal can't be approved. ` +
+        'Reject it and route the order again.',
     );
   }
 }

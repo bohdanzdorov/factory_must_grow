@@ -153,6 +153,70 @@ describe('POST /api/decisions/:id/approve', () => {
   it('returns 404 for an unknown decision', async () => {
     expect((await approve('not-a-uuid')).status).toBe(404);
   });
+
+  it('refuses a proposal that has no booked slot, and changes nothing', async () => {
+    const order = await createOrder({ status: 'ROUTED' });
+    const decision = await createRoutingDecision({
+      orderId: order.id,
+      status: 'PROPOSED',
+      chosenMachineId: 'HAM-1',
+    });
+
+    const res = await approve(decision.id);
+
+    expect(res.status).toBe(409);
+    expect(ErrorResponseSchema.parse(res.body).error.message).toContain('no booked slot');
+    expect(await stateOf(decision.id)).toEqual({ decision: 'PROPOSED', order: 'ROUTED', jobs: [] });
+  });
+
+  it.each(['ERROR', 'OFFLINE'] as const)(
+    'refuses when the machine went %s after routing, and changes nothing',
+    async (status) => {
+      const { decision } = await proposeNewOrder();
+      await prisma.machine.update({ where: { id: 'HAM-1' }, data: { status } });
+
+      const res = await approve(decision.id);
+
+      expect(res.status).toBe(409);
+      expect(ErrorResponseSchema.parse(res.body).error.message).toContain(`HAM-1 is ${status}`);
+      expect(await stateOf(decision.id)).toEqual({
+        decision: 'PROPOSED',
+        order: 'ROUTED',
+        jobs: ['PLANNED'],
+      });
+    },
+  );
+
+  it('refuses when the site went down after routing', async () => {
+    const { decision } = await proposeNewOrder();
+    await prisma.site.update({ where: { id: 'HAM' }, data: { status: 'DOWN' } });
+
+    const res = await approve(decision.id);
+
+    expect(res.status).toBe(409);
+    expect(ErrorResponseSchema.parse(res.body).error.message).toContain('HAM is DOWN');
+  });
+
+  it('still approves when the machine is busy running another job', async () => {
+    const { decision } = await proposeNewOrder();
+    await prisma.machine.update({ where: { id: 'HAM-1' }, data: { status: 'RUNNING' } });
+
+    expect((await approve(decision.id)).status).toBe(200);
+  });
+
+  it('lets the operator reject a proposal whose machine broke, then route elsewhere', async () => {
+    await createMachine({ id: 'HAM-2', siteId: 'HAM' });
+    const { order, decision } = await proposeNewOrder();
+    await prisma.machine.update({ where: { id: 'HAM-1' }, data: { status: 'ERROR' } });
+
+    expect((await reject(decision.id, 'HAM-1 broke down')).status).toBe(200);
+    const rerouted = OrderDecisionResultSchema.parse(
+      (await api().post(`/api/orders/${order.id}/route`)).body,
+    );
+
+    expect(rerouted.decision.chosenMachineId).toBe('HAM-2');
+    expect((await approve(rerouted.decision.id)).status).toBe(200);
+  });
 });
 
 describe('POST /api/decisions/:id/reject', () => {
