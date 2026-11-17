@@ -22,6 +22,20 @@ export function jobsModel(db: DbClient) {
       return db.job.create({ data });
     },
 
+    // Moves a decision's jobs that are currently `from` to `to`; returns how many.
+    // Used to cancel a rejected or expired proposal's booking, which frees its slot.
+    async changeStatusForDecision(
+      routingDecisionId: string,
+      from: JobStatus,
+      to: JobStatus,
+    ): Promise<number> {
+      const { count } = await db.job.updateMany({
+        where: { routingDecisionId, status: from },
+        data: { status: to },
+      });
+      return count;
+    },
+
     // Every slot held by an active job, in the shape routing expects. Pass `endingAfter` to
     // skip jobs that are already over; they can no longer block anything.
     async findActiveReservations(endingAfter?: Date): Promise<Reservation[]> {

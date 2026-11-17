@@ -27,6 +27,7 @@ export function toRoutingDecision(record: RoutingDecisionRecord): RoutingDecisio
     status: record.status,
     chosenMachineId: record.chosenMachineId,
     explanation: record.explanation,
+    rejectionNote: record.rejectionNote,
     supersedesId: record.supersedesId,
     createdAt: record.createdAt.toISOString(),
     candidates: record.candidates.map((candidate): RoutingCandidate => ({

@@ -41,6 +41,8 @@ export const RoutingDecisionSchema = z.object({
   // Null when no machine was eligible.
   chosenMachineId: z.string().nullable(),
   explanation: z.string(),
+  // The operator's reason for rejecting the proposal. Null unless REJECTED.
+  rejectionNote: z.string().nullable(),
   // The decision this one replaces, for reroutes.
   supersedesId: z.string().nullable(),
   createdAt: z.iso.datetime(),
@@ -51,9 +53,16 @@ export const RoutingDecisionSchema = z.object({
 });
 export type RoutingDecision = z.infer<typeof RoutingDecisionSchema>;
 
-// Response of POST /api/orders/:id/route.
-export const RouteOrderResultSchema = z.object({
+// An order together with one of its decisions. Returned by every action on a decision:
+// routing an order, and approving or rejecting a proposal.
+export const OrderDecisionResultSchema = z.object({
   order: OrderSchema,
   decision: RoutingDecisionSchema,
 });
-export type RouteOrderResult = z.infer<typeof RouteOrderResultSchema>;
+export type OrderDecisionResult = z.infer<typeof OrderDecisionResultSchema>;
+
+// Body of POST /api/decisions/:id/reject.
+export const RejectDecisionSchema = z.object({
+  reason: z.string().trim().min(1).max(500),
+});
+export type RejectDecisionInput = z.infer<typeof RejectDecisionSchema>;

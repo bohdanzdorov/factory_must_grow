@@ -80,6 +80,37 @@ Implemented as a pure function, `routeOrder` in `apps/backend/src/domain/routing
 - When a proposal is rejected or expires, its job becomes `CANCELLED`, the order returns to `DRAFT`, and the slot is free immediately. Routing again is the operator's choice.
 - Other jobs never move earlier or later to fill a gap, because their times were approved.
 
+### Approving and rejecting through the API
+
+`POST /api/decisions/:id/approve` and `POST /api/decisions/:id/reject` (in `services/decisions.service.ts`) work the same for first proposals and reroutes.
+
+| Action           | Decision                                            | Job                     | Order                                      |
+| ---------------- | --------------------------------------------------- | ----------------------- | ------------------------------------------ |
+| Approve          | `PROPOSED` → `APPROVED`                             | stays `PLANNED`         | `ROUTED` or `REROUTE_PENDING` → `APPROVED` |
+| Reject           | `PROPOSED` → `REJECTED`, with the operator's reason | `PLANNED` → `CANCELLED` | → `DRAFT`                                  |
+| Approve too late | `PROPOSED` → `EXPIRED`                              | `PLANNED` → `CANCELLED` | → `DRAFT`                                  |
+
+- **Rejecting requires a reason** (1–500 characters), saved as `rejectionNote` on the decision. It is the operator's own words, separate from the machine-level rejection reasons on candidates.
+- **Approving after the job's planned start has passed** expires the proposal on the spot and returns 409. The expiry is saved even though the request fails: the transaction returns an "expired" result, and the 409 is raised only after it commits. The background sweep (W3-09) does the same for proposals nobody touches.
+- **Repeating the same action is harmless:** approving an approved decision, or rejecting a rejected one, returns 200 with the current state. The first rejection reason is kept. A conflicting action, such as approving a rejected decision, returns 409.
+- **Two layers stop approve and reject from both winning:** the order row is locked for the whole transaction, and the decision only changes if its status is still the one that was read. Removing both lets a concurrent approve and reject both succeed; a test runs six such races at once to catch that.
+
+## Status changes
+
+`domain/order-status.ts` lists every allowed status change, and every service checks it before saving. An impossible change, such as `COMPLETE` back to `DRAFT`, is refused with 409 wherever it is attempted.
+
+| Order status      | May become                                        | Triggered by                                      |
+| ----------------- | ------------------------------------------------- | ------------------------------------------------- |
+| `DRAFT`           | `ROUTED`, `BLOCKED`                               | Routing                                           |
+| `BLOCKED`         | `ROUTED`, `BLOCKED`                               | Retrying by hand, or after a machine recovers     |
+| `ROUTED`          | `APPROVED`; `DRAFT`; `REROUTE_PENDING`, `BLOCKED` | Approve; reject or expire; proposed machine fails |
+| `APPROVED`        | `IN_PRODUCTION`; `REROUTE_PENDING`, `BLOCKED`     | Job starts; machine fails                         |
+| `IN_PRODUCTION`   | `COMPLETE`; `REROUTE_PENDING`, `BLOCKED`          | Job completes; machine fails mid-job              |
+| `REROUTE_PENDING` | `APPROVED`; `DRAFT`; `REROUTE_PENDING`, `BLOCKED` | Approve; reject or expire; new machine fails too  |
+| `COMPLETE`        | nothing                                           | Final                                             |
+
+A decision is decided exactly once: `PROPOSED` may become `APPROVED`, `REJECTED`, `EXPIRED` or `SUPERSEDED`, and every other decision status is final.
+
 ## Commands
 
 - Commands not yet acknowledged are resent in heartbeat responses. The simulator ignores command ids it has already seen.

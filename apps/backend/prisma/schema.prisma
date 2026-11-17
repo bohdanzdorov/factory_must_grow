@@ -192,6 +192,8 @@ model RoutingDecision {
   // Null when no machine is eligible and the order becomes BLOCKED.
   chosenMachineId String?               @map("chosen_machine_id")
   explanation     String
+  // The operator's own words when rejecting a proposal. Null for any other status.
+  rejectionNote   String?               @map("rejection_note")
   kind            RoutingDecisionKind
   status          RoutingDecisionStatus @default(PROPOSED)
   supersedesId    String?               @map("supersedes_id")

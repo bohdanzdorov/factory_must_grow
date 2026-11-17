@@ -66,6 +66,21 @@ export function routingDecisionsModel(db: DbClient) {
       });
     },
 
+    // Changes the status only if it is still `from`, and reports whether it did. Checking and
+    // changing happen in one statement, so two requests can't both change the same decision.
+    async changeStatus(
+      id: string,
+      from: RoutingDecisionStatus,
+      to: RoutingDecisionStatus,
+      rejectionNote: string | null = null,
+    ): Promise<boolean> {
+      const { count } = await db.routingDecision.updateMany({
+        where: { id, status: from },
+        data: { status: to, rejectionNote },
+      });
+      return count === 1;
+    },
+
     // Machines the operator rejected for this order, so routing doesn't propose them again.
     async findRejectedMachineIds(orderId: string): Promise<string[]> {
       const rows = await db.routingDecision.findMany({

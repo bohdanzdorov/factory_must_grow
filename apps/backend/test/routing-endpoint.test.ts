@@ -1,6 +1,6 @@
 import {
   ErrorResponseSchema,
-  RouteOrderResultSchema,
+  OrderDecisionResultSchema,
   RoutingDecisionSchema,
 } from '@factorymustgrow/shared';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -47,7 +47,7 @@ describe('POST /api/orders/:id/route', () => {
     const res = await route(order.id);
 
     expect(res.status).toBe(201);
-    const { order: routed, decision } = RouteOrderResultSchema.parse(res.body);
+    const { order: routed, decision } = OrderDecisionResultSchema.parse(res.body);
     expect(routed.status).toBe('ROUTED');
     expect(decision).toMatchObject({
       orderId: order.id,
@@ -87,7 +87,7 @@ describe('POST /api/orders/:id/route', () => {
 
     const res = await route(order.id);
 
-    expect(RouteOrderResultSchema.parse(res.body).decision.jobs[0]?.plannedStart).toBe(
+    expect(OrderDecisionResultSchema.parse(res.body).decision.jobs[0]?.plannedStart).toBe(
       iso(5 * HOUR),
     );
   });
@@ -98,7 +98,7 @@ describe('POST /api/orders/:id/route', () => {
     const res = await route(order.id);
 
     expect(res.status).toBe(201);
-    const { order: blocked, decision } = RouteOrderResultSchema.parse(res.body);
+    const { order: blocked, decision } = OrderDecisionResultSchema.parse(res.body);
     expect(decision).toMatchObject({ status: 'NO_ELIGIBLE_MACHINE', chosenMachineId: null });
     expect(decision.jobs).toEqual([]);
     expect(decision.candidates[0]?.rejectionReason).toBe('MISSING_CAPABILITY');
@@ -112,7 +112,7 @@ describe('POST /api/orders/:id/route', () => {
 
     const res = await route(order.id);
 
-    const { order: routed } = RouteOrderResultSchema.parse(res.body);
+    const { order: routed } = OrderDecisionResultSchema.parse(res.body);
     expect(routed).toMatchObject({ status: 'ROUTED', blockedReason: null });
   });
 
@@ -127,7 +127,7 @@ describe('POST /api/orders/:id/route', () => {
 
     const res = await route(order.id);
 
-    const { decision } = RouteOrderResultSchema.parse(res.body);
+    const { decision } = OrderDecisionResultSchema.parse(res.body);
     expect(decision.chosenMachineId).toBe('HAM-2');
     expect(decision.candidates.find((c) => c.machineId === 'HAM-1')?.rejectionReason).toBe(
       'REJECTED_BY_OPERATOR',

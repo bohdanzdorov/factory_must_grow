@@ -1,6 +1,6 @@
 // The retry when another request takes the slot between routing and saving. That race
 // can't be timed reliably, so routing is wrapped to propose a slot that is already taken.
-import { ErrorResponseSchema, RouteOrderResultSchema } from '@factorymustgrow/shared';
+import { ErrorResponseSchema, OrderDecisionResultSchema } from '@factorymustgrow/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../src/config/prisma.js';
 import type * as Routing from '../src/domain/routing.js';
@@ -61,7 +61,7 @@ describe('routing retry after a slot collision', () => {
 
     expect(res.status).toBe(201);
     expect(forced.calls).toBe(2);
-    const { decision } = RouteOrderResultSchema.parse(res.body);
+    const { decision } = OrderDecisionResultSchema.parse(res.body);
     expect(decision.jobs[0]?.plannedStart).not.toBe(TAKEN.start.toISOString());
     // The failed first attempt left nothing behind.
     expect(await prisma.routingDecision.count({ where: { orderId: order.id } })).toBe(1);

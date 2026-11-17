@@ -1,26 +1,22 @@
 // Routing an order: loads the data, runs the pure routing function, and saves the decision,
 // its candidates and the job holding the slot, all in one transaction.
-import type { RouteOrderResult, RoutingDecision } from '@factorymustgrow/shared';
+import type { OrderDecisionResult, RoutingDecision } from '@factorymustgrow/shared';
 import { getClock } from '../config/clock.js';
 import { db, transaction, type Models } from '../config/database.js';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
+import { canChangeOrderStatus } from '../domain/order-status.js';
 import { routeOrder as decideRoute } from '../domain/routing.js';
 import { isJobOverlapError } from '../errors/database-errors.js';
 import { HttpError } from '../errors/http-error.js';
-import type { OrderStatus } from '../generated/prisma/client.js';
 import { toOrder } from '../mappers/order.mapper.js';
 import { toNewCandidates, toRoutingDecision } from '../mappers/routing-decision.mapper.js';
-
-// DRAFT for a first routing; BLOCKED so an operator can retry by hand, for example after
-// a machine is repaired.
-const ROUTABLE_STATUSES: OrderStatus[] = ['DRAFT', 'BLOCKED'];
 
 // If another request books the same slot first, the job insert fails on the job_no_overlap
 // constraint and everything rolls back. Routing again with fresh data finds the next slot.
 const MAX_ATTEMPTS = 3;
 
-export async function routeOrder(orderId: string): Promise<RouteOrderResult> {
+export async function routeOrder(orderId: string): Promise<OrderDecisionResult> {
   for (let attempt = 1; ; attempt++) {
     try {
       return await transaction((tx) => routeOnce(tx, orderId));
@@ -38,7 +34,7 @@ export async function routeOrder(orderId: string): Promise<RouteOrderResult> {
   }
 }
 
-async function routeOnce(tx: Models, orderId: string): Promise<RouteOrderResult> {
+async function routeOnce(tx: Models, orderId: string): Promise<OrderDecisionResult> {
   // Two route requests for the same order now run one after the other, so the second
   // sees the first one's result and fails the status check below.
   if (!(await tx.orders.lockById(orderId))) {
@@ -50,7 +46,8 @@ async function routeOnce(tx: Models, orderId: string): Promise<RouteOrderResult>
     throw new HttpError(404, `Order not found: ${orderId}`);
   }
 
-  if (!ROUTABLE_STATUSES.includes(order.status)) {
+  // Allowed exactly from DRAFT (first routing) and BLOCKED (retry), per the state machine.
+  if (!canChangeOrderStatus(order.status, 'ROUTED')) {
     throw new HttpError(
       409,
       `Order ${orderId} is ${order.status}; only DRAFT or BLOCKED orders can be routed.`,
