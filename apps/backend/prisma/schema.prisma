@@ -219,6 +219,7 @@ model RoutingCandidate {
   rejectionReason   CandidateRejectionReason? @map("rejection_reason")
   earliestStart     DateTime?                 @map("earliest_start") @db.Timestamptz(3)
   finishAt          DateTime?                 @map("finish_at") @db.Timestamptz(3)
+  arrivalAt         DateTime?                 @map("arrival_at") @db.Timestamptz(3)
   slackMinutes      Decimal?                  @map("slack_minutes") @db.Decimal(12, 2)
 
   routingDecision RoutingDecision @relation(fields: [routingDecisionId], references: [id])

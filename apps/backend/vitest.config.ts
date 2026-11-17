@@ -11,6 +11,8 @@ export default defineConfig({
       DATABASE_URL: testDatabaseUrl,
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',
+      // Fixed, so tests don't depend on a value in .env.
+      APPROVAL_WINDOW_SECONDS: '120',
     },
     globalSetup: ['./test/global-setup.ts'],
     setupFiles: ['./test/setup.ts'],

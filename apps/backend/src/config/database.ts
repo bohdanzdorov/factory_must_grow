@@ -2,6 +2,7 @@ import { healthModel } from '../models/health.model.js';
 import { jobsModel } from '../models/jobs.model.js';
 import { machinesModel } from '../models/machines.model.js';
 import { ordersModel } from '../models/orders.model.js';
+import { routingDecisionsModel } from '../models/routing-decisions.model.js';
 import { shippingLeadTimesModel } from '../models/shipping-lead-times.model.js';
 import { sitesModel } from '../models/sites.model.js';
 import { prisma, type DbClient } from './prisma.js';
@@ -14,6 +15,7 @@ function createModels(client: DbClient) {
     machines: machinesModel(client),
     orders: ordersModel(client),
     jobs: jobsModel(client),
+    routingDecisions: routingDecisionsModel(client),
     shippingLeadTimes: shippingLeadTimesModel(client),
   };
 }
@@ -23,8 +25,16 @@ export type Models = ReturnType<typeof createModels>;
 // Models for single queries, each running on its own.
 export const db: Models = createModels(prisma);
 
+// Chosen deliberately rather than relying on Prisma's defaults (5 s and 2 s):
+// how long a transaction may run, and how long it may wait for a free connection.
+const TRANSACTION_TIMEOUT_MS = 10_000;
+const TRANSACTION_MAX_WAIT_MS = 5_000;
+
 // Runs `work` in one transaction: every model call on `tx` commits together,
 // or all of them roll back if `work` throws.
 export function transaction<T>(work: (tx: Models) => Promise<T>): Promise<T> {
-  return prisma.$transaction((client) => work(createModels(client)));
+  return prisma.$transaction((client) => work(createModels(client)), {
+    timeout: TRANSACTION_TIMEOUT_MS,
+    maxWait: TRANSACTION_MAX_WAIT_MS,
+  });
 }

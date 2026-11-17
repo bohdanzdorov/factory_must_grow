@@ -27,5 +27,19 @@ export function ordersModel(db: DbClient) {
     insert(data: NewOrder): Promise<Order> {
       return db.order.create({ data });
     },
+
+    // Locks the order's row until the surrounding transaction ends, so concurrent work on
+    // the same order waits its turn instead of racing. Only meaningful inside `transaction()`.
+    // Returns false if the order doesn't exist.
+    async lockById(id: string): Promise<boolean> {
+      const rows = await db.$queryRaw<{ id: string }[]>`
+        SELECT id FROM orders WHERE id = ${id} FOR UPDATE
+      `;
+      return rows.length > 0;
+    },
+
+    updateStatus(id: string, status: OrderStatus, blockedReason: string | null): Promise<Order> {
+      return db.order.update({ where: { id }, data: { status, blockedReason } });
+    },
   };
 }

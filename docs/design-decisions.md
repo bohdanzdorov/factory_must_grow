@@ -54,9 +54,22 @@ Implemented as a pure function, `routeOrder` in `apps/backend/src/domain/routing
 - Machines that miss the deadline keep their timing in the decision, so the explanation can say how late they would be.
 - Machines already rejected for an order are excluded when that order is routed again, with the rejection reason `REJECTED_BY_OPERATOR`.
 - A failed routing attempt still stores a decision with its candidates and reasons, using `NO_ELIGIBLE_MACHINE`.
-- When a blocked order is retried, a new decision is stored only if a machine is found.
+- When a blocked order is retried **automatically** (after a machine recovers, W3-06), a new decision is stored only if a machine is found. A manual retry through the API always stores its decision, because the operator asked for it.
 - An order becomes `BLOCKED` when no single machine has every required capability, when every capable machine or site is unavailable, or when every remaining candidate misses the deadline.
 - An order whose deadline can no longer be met stays `BLOCKED`, because editing orders is out of scope for v1.
+- **v1 routes each order to a single machine** (rule 2). Splitting an order's operations across several machines is a possible extension, but it turns routing into scheduling a chain of jobs, with transfers between sites and failures mid-chain.
+
+### Routing an order through the API
+
+`POST /api/orders/:id/route` (in `services/routing.service.ts`) does everything in **one transaction**: lock the order, load the data, run `routeOrder`, save the decision with all candidates, book the job, and update the order. Either all of it is saved or none of it.
+
+- **Only `DRAFT` and `BLOCKED` orders can be routed.** Any other status returns 409.
+- **The order's row is locked** (`SELECT ... FOR UPDATE`) for the whole transaction, so two route requests for the same order run one after the other, and the second gets 409.
+- **When two different orders grab the same slot,** the second job insert hits `job_no_overlap`, everything rolls back, and routing runs again with fresh data. After 3 attempts the request returns 409.
+- The lock and the constraint overlap for the common case: when two requests for one order compute the same slot, the second collides, retries, and then sees the order is `ROUTED`. The lock is still needed for a rarer timing, where the second request reads the order before the first commits but reads the bookings after. It would then pick a different free slot, and the order would be booked twice.
+- The approval window is converted to simulated time here: `APPROVAL_WINDOW_SECONDS` × 1000 × the clock's scale.
+- Transactions have an explicit timeout of 10 seconds and wait at most 5 seconds for a connection, instead of Prisma's defaults.
+- Candidates store `arrival_at` as well as start and finish, so screens can show when each machine's parts would arrive.
 
 ## Proposals and approval
 
