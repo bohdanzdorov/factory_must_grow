@@ -1,4 +1,5 @@
 import { healthModel } from '../models/health.model.js';
+import { jobsModel } from '../models/jobs.model.js';
 import { machinesModel } from '../models/machines.model.js';
 import { ordersModel } from '../models/orders.model.js';
 import { shippingLeadTimesModel } from '../models/shipping-lead-times.model.js';
@@ -12,6 +13,7 @@ function createModels(client: DbClient) {
     sites: sitesModel(client),
     machines: machinesModel(client),
     orders: ordersModel(client),
+    jobs: jobsModel(client),
     shippingLeadTimes: shippingLeadTimesModel(client),
   };
 }

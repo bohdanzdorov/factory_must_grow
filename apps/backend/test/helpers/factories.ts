@@ -4,12 +4,16 @@ import { getClock } from '../../src/config/clock.js';
 import { prisma } from '../../src/config/prisma.js';
 import type {
   Capability,
+  JobStatus,
   MachineStatus,
   OrderStatus,
+  RoutingDecisionKind,
+  RoutingDecisionStatus,
   SiteStatus,
 } from '../../src/generated/prisma/enums.js';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 let counter = 0;
 
 function nextId(prefix: string): string {
@@ -84,5 +88,52 @@ export function createOrder(
       createdAt: now,
       ...overrides,
     },
+  });
+}
+
+export async function createRoutingDecision(
+  overrides: {
+    orderId?: string;
+    chosenMachineId?: string | null;
+    kind?: RoutingDecisionKind;
+    status?: RoutingDecisionStatus;
+    explanation?: string;
+  } = {},
+) {
+  const { orderId = (await createOrder()).id, ...fields } = overrides;
+
+  return prisma.routingDecision.create({
+    data: {
+      explanation: 'Test decision',
+      kind: 'INITIAL',
+      createdAt: getClock().now(),
+      ...fields,
+      orderId,
+    },
+  });
+}
+
+// A job on a machine. Without a machine or decision, new ones are created for it.
+// By default it starts at the clock's current time and lasts one hour.
+export async function createJob(
+  overrides: {
+    machineId?: string;
+    routingDecisionId?: string;
+    status?: JobStatus;
+    plannedStart?: Date;
+    plannedEnd?: Date;
+  } = {},
+) {
+  const now = getClock().now();
+  const {
+    machineId = (await createMachine()).id,
+    routingDecisionId = (await createRoutingDecision()).id,
+    plannedStart = now,
+    plannedEnd = new Date(plannedStart.getTime() + HOUR_MS),
+    ...fields
+  } = overrides;
+
+  return prisma.job.create({
+    data: { ...fields, machineId, routingDecisionId, plannedStart, plannedEnd },
   });
 }

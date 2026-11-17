@@ -11,6 +11,18 @@ Decisions made while designing the domain schema (W1-04). They refine or overrid
 - `seq` and `lastSeq` are `BigInt`.
 - The orders table is named `orders`, because `order` is a reserved word in SQL.
 
+## No double-booking (rule 1)
+
+The database itself refuses to double-book a machine, so the rule holds even if application code is wrong or two requests arrive at the same moment. The `job` table is the reservation table: every active job holds its time slot.
+
+- **`job_no_overlap`** is an exclusion constraint: no two jobs on the same machine may have overlapping `[planned_start, planned_end)` ranges. It uses the `btree_gist` extension and is written in hand-made SQL, because Prisma cannot describe it.
+- **Only `PLANNED` and `RUNNING` jobs count.** Released, cancelled and complete jobs stay as history without blocking the slot. The list lives in two places, the constraint's `WHERE` clause and `ACTIVE_JOB_STATUSES` in `jobs.model.ts`, and they must match.
+- **Ranges are half-open**, so a job may start exactly when another ends. Routing's gap search uses the same convention.
+- **`job_planned_end_after_start`** requires a job to take some time, because a zero-length range overlaps nothing and would slip past the overlap check.
+- The constraint also applies to updates, such as making a cancelled job active again.
+- Prisma ignores both constraints: `prisma migrate dev` doesn't try to drop them, and the drift check still passes.
+- **How the error arrives:** Prisma has no code of its own for it. It comes as a generic `PrismaClientKnownRequestError` (code `P2039`), with Postgres code `23P01` nested in `meta.driverAdapterError.cause`. `isJobOverlapError` in `errors/database-errors.ts` recognises it, so a collision can become a 409 instead of a 500.
+
 ## Status meanings
 
 | Decision status       | Meaning                                              |
