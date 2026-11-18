@@ -7,13 +7,14 @@ import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { canChangeOrderStatus } from '../domain/order-status.js';
 import { routeOrder as decideRoute } from '../domain/routing.js';
-import { isJobOverlapError } from '../errors/database-errors.js';
+import { isConcurrentBookingConflict, isJobOverlapError } from '../errors/database-errors.js';
 import { HttpError } from '../errors/http-error.js';
 import { toOrder } from '../mappers/order.mapper.js';
 import { toNewCandidates, toRoutingDecision } from '../mappers/routing-decision.mapper.js';
 
-// If another request books the same slot first, the job insert fails on the job_no_overlap
-// constraint and everything rolls back. Routing again with fresh data finds the next slot.
+// If another request books the same slot at the same moment, saving the job fails (as an
+// overlap, or as a deadlock when both write at the same instant) and everything rolls back.
+// Routing again with fresh data finds the next slot.
 // One first try plus 4 retries. Requests routed at the same moment all pick the same slot,
 // so each round only one of them wins; more retries let a burst of requests get through.
 const MAX_ATTEMPTS = 5;
@@ -23,7 +24,7 @@ export async function routeOrder(orderId: string): Promise<OrderDecisionResult> 
     try {
       return await transaction((tx) => routeOnce(tx, orderId));
     } catch (err) {
-      if (!isJobOverlapError(err)) throw err;
+      if (!isConcurrentBookingConflict(err)) throw err;
 
       if (attempt >= MAX_ATTEMPTS) {
         throw new HttpError(
@@ -31,7 +32,10 @@ export async function routeOrder(orderId: string): Promise<OrderDecisionResult> 
           'Could not book a slot because machines are being booked at the same time. Try again.',
         );
       }
-      logger.info({ orderId, attempt }, 'Slot was taken during routing; retrying');
+      logger.info(
+        { orderId, attempt, conflict: isJobOverlapError(err) ? 'overlap' : 'deadlock' },
+        'Another request was booking at the same moment; retrying',
+      );
     }
   }
 }

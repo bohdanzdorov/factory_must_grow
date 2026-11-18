@@ -3,7 +3,12 @@
 import { describe, expect, it } from 'vitest';
 import { db, transaction } from '../src/config/database.js';
 import { prisma } from '../src/config/prisma.js';
-import { isJobOverlapError } from '../src/errors/database-errors.js';
+import {
+  isConcurrentBookingConflict,
+  isDeadlockOrWriteConflict,
+  isJobOverlapError,
+} from '../src/errors/database-errors.js';
+import { Prisma } from '../src/generated/prisma/client.js';
 import { createJob, createMachine, createRoutingDecision } from './helpers/factories.js';
 
 const at = (time: string) => new Date(`2030-01-01T${time}:00Z`);
@@ -144,6 +149,45 @@ describe('isJobOverlapError', () => {
       false,
     );
     expect(isJobOverlapError(undefined)).toBe(false);
+  });
+});
+
+describe('isDeadlockOrWriteConflict and isConcurrentBookingConflict', () => {
+  const deadlock = new Prisma.PrismaClientKnownRequestError(
+    'Transaction failed due to a write conflict or a deadlock. Please retry your transaction',
+    { code: 'P2034', clientVersion: 'test' },
+  );
+
+  async function realOverlapError(): Promise<unknown> {
+    const machine = await createMachine();
+    await createJob({ machineId: machine.id, plannedStart: at('10:00') });
+    return createJob({ machineId: machine.id, plannedStart: at('10:30') }).catch(
+      (err: unknown) => err,
+    );
+  }
+
+  it('recognises a deadlock, but not as an overlap', () => {
+    expect(isDeadlockOrWriteConflict(deadlock)).toBe(true);
+    expect(isJobOverlapError(deadlock)).toBe(false);
+  });
+
+  it('treats both an overlap and a deadlock as a concurrent booking conflict', async () => {
+    const overlap = await realOverlapError();
+
+    expect(isConcurrentBookingConflict(overlap)).toBe(true);
+    expect(isConcurrentBookingConflict(deadlock)).toBe(true);
+    expect(isDeadlockOrWriteConflict(overlap)).toBe(false);
+  });
+
+  it('does not treat other errors as conflicts', () => {
+    const otherPrismaError = new Prisma.PrismaClientKnownRequestError('Record not found', {
+      code: 'P2025',
+      clientVersion: 'test',
+    });
+
+    expect(isConcurrentBookingConflict(otherPrismaError)).toBe(false);
+    expect(isConcurrentBookingConflict(new Error('Disk full'))).toBe(false);
+    expect(isConcurrentBookingConflict(undefined)).toBe(false);
   });
 });
 

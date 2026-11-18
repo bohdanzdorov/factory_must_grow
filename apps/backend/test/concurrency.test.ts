@@ -63,6 +63,18 @@ async function expectConsistent() {
   expect(await findInconsistencies()).toEqual([]);
 }
 
+// Responses with a status outside `allowed`, with their bodies, so a failing check shows
+// what actually came back (such as a 500) instead of only "expected false to be true".
+// The server's own error log for a 500 appears in the test output too.
+function unexpectedResponses(
+  responses: ({ status: number; body: unknown } | undefined)[],
+  allowed: number[],
+) {
+  return responses
+    .filter((res) => !res || !allowed.includes(res.status))
+    .map((res) => ({ status: res?.status, body: res?.body }));
+}
+
 describe('routing many orders at the same moment', STRESS, () => {
   it('never double-books one machine; each request succeeds or cleanly gives up', async () => {
     await createNetwork(['HAM'], 1);
@@ -70,10 +82,14 @@ describe('routing many orders at the same moment', STRESS, () => {
 
     for (let round = 0; round < ROUNDS; round++) {
       const results = await routeAllAtOnce(10);
+      expect(
+        unexpectedResponses(
+          results.map(({ res }) => res),
+          [201, 409],
+        ),
+      ).toEqual([]);
 
       for (const { order, res } of results) {
-        expect([201, 409]).toContain(res?.status);
-
         if (res?.status === 409) {
           // Gave up: nothing was saved, so the order can simply be routed again.
           expect(await prisma.routingDecision.count({ where: { orderId: order.id } })).toBe(0);
@@ -94,6 +110,13 @@ describe('routing many orders at the same moment', STRESS, () => {
     await createNetwork(['HAM'], 1);
 
     const results = await routeAllAtOnce(10);
+    // Without this check, 500s from unhandled deadlocks went unnoticed here (W2-07).
+    expect(
+      unexpectedResponses(
+        results.map(({ res }) => res),
+        [201, 409],
+      ),
+    ).toEqual([]);
 
     const firstSlot = new Date(START + 2 * 60 * 60 * 1000).toISOString(); // after the window
     const startingFirst = results.filter(({ res }) => {
@@ -111,7 +134,12 @@ describe('routing many orders at the same moment', STRESS, () => {
     for (let round = 0; round < ROUNDS; round++) {
       const results = await routeAllAtOnce(20);
 
-      expect(results.every(({ res }) => res?.status === 201 || res?.status === 409)).toBe(true);
+      expect(
+        unexpectedResponses(
+          results.map(({ res }) => res),
+          [201, 409],
+        ),
+      ).toEqual([]);
       await expectConsistent();
     }
   });
@@ -146,12 +174,8 @@ describe('routing, approving and rejecting at the same moment', STRESS, () => {
         ...newOrders.map((order) => api().post(`/api/orders/${order.id}/route`)),
       ]);
 
-      expect(responses.slice(0, 6).map((res) => res.status)).toEqual([
-        200, 200, 200, 200, 200, 200,
-      ]);
-      expect(responses.slice(6).every((res) => res.status === 201 || res.status === 409)).toBe(
-        true,
-      );
+      expect(unexpectedResponses(responses.slice(0, 6), [200])).toEqual([]);
+      expect(unexpectedResponses(responses.slice(6), [201, 409])).toEqual([]);
       await expectConsistent();
     }
   });
