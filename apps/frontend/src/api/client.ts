@@ -2,10 +2,12 @@
 // schemas, so the UI never works with data that doesn't match the API contract.
 import {
   ClockStateSchema,
+  DestinationsSchema,
   ErrorResponseSchema,
   OrderDecisionResultSchema,
   OrderSchema,
   RoutingDecisionSchema,
+  type CreateOrderInput,
   type ErrorResponse,
   type OrderStatus,
 } from '@factorymustgrow/shared';
@@ -45,6 +47,11 @@ export const api = {
     request(`/orders${status ? `?status=${status}` : ''}`, OrderSchema.array()),
 
   getOrder: (id: string) => request(`/orders/${id}`, OrderSchema),
+
+  createOrder: (input: CreateOrderInput) =>
+    request('/orders', OrderSchema, { method: 'POST', body: JSON.stringify(input) }),
+
+  listDestinations: () => request('/destinations', DestinationsSchema),
 
   listDecisions: (orderId: string) =>
     request(`/orders/${orderId}/decisions`, RoutingDecisionSchema.array()),

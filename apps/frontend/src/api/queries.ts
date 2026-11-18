@@ -1,6 +1,6 @@
 // Data for the screens, kept fresh by polling (the plan's choice over WebSockets).
 // Actions refresh the affected data straight away instead of waiting for the next poll.
-import type { OrderStatus } from '@factorymustgrow/shared';
+import type { CreateOrderInput, OrderStatus } from '@factorymustgrow/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
 
@@ -11,6 +11,7 @@ const keys = {
   order: (id: string) => ['order', id] as const,
   decisions: (orderId: string) => ['decisions', orderId] as const,
   clock: ['clock'] as const,
+  destinations: ['destinations'] as const,
 };
 
 export function useOrders(status?: OrderStatus) {
@@ -39,6 +40,25 @@ export function useDecisions(orderId: string) {
 
 export function useClock() {
   return useQuery({ queryKey: keys.clock, queryFn: api.getClock, refetchInterval: POLL_MS });
+}
+
+// Destinations only change when the shipping table does, so they aren't polled.
+export function useDestinations() {
+  return useQuery({
+    queryKey: keys.destinations,
+    queryFn: api.listDestinations,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+// Creating an order changes every orders list, so they all reload afterwards.
+export function useCreateOrder() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: CreateOrderInput) => api.createOrder(input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['orders'] }),
+  });
 }
 
 // After any action on an order, everything showing it reloads.

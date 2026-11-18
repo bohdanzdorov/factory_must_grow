@@ -5,6 +5,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
 import { ApiError } from './api/client';
 import { Layout } from './components/layout/Layout';
 import './index.css';
+import { NewOrderPage } from './pages/NewOrderPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { OrderDetailPage } from './pages/OrderDetailPage';
 import { OrdersPage } from './pages/OrdersPage';
@@ -32,6 +33,7 @@ createRoot(root).render(
           <Route element={<Layout />}>
             <Route index element={<Navigate to="/orders" replace />} />
             <Route path="orders" element={<OrdersPage />} />
+            <Route path="orders/new" element={<NewOrderPage />} />
             <Route path="orders/:orderId" element={<OrderDetailPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>

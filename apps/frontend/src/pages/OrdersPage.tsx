@@ -1,5 +1,5 @@
 import { OrderStatusSchema, type OrderStatus } from '@factorymustgrow/shared';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { useOrders } from '../api/queries';
 import { ErrorMessage } from '../components/general/ErrorMessage';
 import { OrdersTable } from '../components/orders/OrdersTable';
@@ -15,7 +15,15 @@ export function OrdersPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <h1 className="text-xl font-semibold">Orders</h1>
+        <div className="flex items-center gap-4">
+          <h1 className="text-xl font-semibold">Orders</h1>
+          <Link
+            to="/orders/new"
+            className="rounded-md bg-blue-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-800"
+          >
+            New order
+          </Link>
+        </div>
         <label className="flex items-center gap-2 text-sm">
           <span className="text-slate-500">Status</span>
           <select

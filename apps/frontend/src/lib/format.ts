@@ -19,6 +19,17 @@ export function formatDateTime(iso: string | null): string {
   return iso ? dateTime.format(new Date(iso)) : '—';
 }
 
+// The value format of <input type="datetime-local">: local time, "2026-11-25T14:30".
+export function toDateTimeInputValue(milliseconds: number): string {
+  const date = new Date(milliseconds);
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  return (
+    `${String(date.getFullYear())}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+}
+
 // ISO timestamps as the backend writes them, such as 2026-11-18T14:15:05.908Z.
 const ISO_TIMESTAMP = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g;
 

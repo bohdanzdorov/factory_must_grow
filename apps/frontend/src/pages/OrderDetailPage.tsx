@@ -2,7 +2,7 @@ import { useParams } from 'react-router';
 import { ApiError } from '../api/client';
 import { useDecisions, useOrder } from '../api/queries';
 import { ErrorMessage } from '../components/general/ErrorMessage';
-import { BackToOrdersLink } from '../components/order-detail/BackToOrdersLink';
+import { BackToOrdersLink } from '../components/general/BackToOrdersLink';
 import { DecisionCard } from '../components/order-detail/DecisionCard';
 import { DecisionHistory } from '../components/order-detail/DecisionHistory';
 import { OrderSummary } from '../components/order-detail/OrderSummary';
