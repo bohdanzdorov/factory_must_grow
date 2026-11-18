@@ -67,15 +67,15 @@ describe('routing retry after a slot collision', () => {
     expect(await prisma.routingDecision.count({ where: { orderId: order.id } })).toBe(1);
   });
 
-  it('gives up with 409 after three collisions and saves nothing', async () => {
-    forced.slots = [TAKEN, TAKEN, TAKEN];
+  it('gives up with 409 after five collisions (4 retries) and saves nothing', async () => {
+    forced.slots = Array.from({ length: 5 }, () => TAKEN);
     const order = await createOrder();
 
     const res = await api().post(`/api/orders/${order.id}/route`);
 
     expect(res.status).toBe(409);
     expect(ErrorResponseSchema.parse(res.body).error.message).toContain('Try again');
-    expect(forced.calls).toBe(3);
+    expect(forced.calls).toBe(5);
     expect(await prisma.routingDecision.count({ where: { orderId: order.id } })).toBe(0);
     expect((await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).status).toBe(
       'DRAFT',

@@ -14,7 +14,9 @@ import { toNewCandidates, toRoutingDecision } from '../mappers/routing-decision.
 
 // If another request books the same slot first, the job insert fails on the job_no_overlap
 // constraint and everything rolls back. Routing again with fresh data finds the next slot.
-const MAX_ATTEMPTS = 3;
+// One first try plus 4 retries. Requests routed at the same moment all pick the same slot,
+// so each round only one of them wins; more retries let a burst of requests get through.
+const MAX_ATTEMPTS = 5;
 
 export async function routeOrder(orderId: string): Promise<OrderDecisionResult> {
   for (let attempt = 1; ; attempt++) {
