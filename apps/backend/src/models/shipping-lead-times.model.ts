@@ -11,6 +11,17 @@ export function shippingLeadTimesModel(db: DbClient) {
       return row !== null;
     },
 
+    // Every destination that at least one site ships to, sorted, each listed once.
+    async findDestinations(): Promise<string[]> {
+      const rows = await db.shippingLeadTime.findMany({
+        select: { destination: true },
+        distinct: ['destination'],
+        orderBy: { destination: 'asc' },
+      });
+
+      return rows.map((row) => row.destination);
+    },
+
     // Days to ship to `destination` from each site that has a route, keyed by site id.
     async daysToDestination(destination: string): Promise<Record<string, number>> {
       const rows = await db.shippingLeadTime.findMany({
