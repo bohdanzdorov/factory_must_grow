@@ -10,7 +10,9 @@ export default defineConfig({
     env: {
       DATABASE_URL: testDatabaseUrl,
       NODE_ENV: 'test',
-      LOG_LEVEL: 'silent',
+      // Only unhandled server errors are logged, so a test that gets an unexpected 500 shows
+      // its real cause. The error-handler test triggers one on purpose and logs it.
+      LOG_LEVEL: 'error',
       // Fixed, so tests don't depend on a value in .env.
       APPROVAL_WINDOW_SECONDS: '120',
     },

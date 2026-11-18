@@ -46,6 +46,14 @@ Requires Node.js 22.13+ and Docker Desktop.
 
 5. Check it at `http://localhost:4000/health`, or list the seeded sites at `http://localhost:4000/api/sites`.
 
+6. In a second terminal, start the operator UI on `http://localhost:5173`:
+
+   ```bash
+   npm run dev:frontend
+   ```
+
+   The UI forwards `/api` requests to the API, so both must be running. All times shown are simulated (60× real time by default), so a proposal must be approved within about 2 real minutes.
+
 ## Running tests
 
 With PostgreSQL running (`npm run db:up`):
