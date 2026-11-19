@@ -1,4 +1,4 @@
-import { createScaledClock, type Clock } from '@factorymustgrow/shared';
+import { createScaledClock, type Clock } from '../domain/clock.js';
 import { env } from './env.js';
 
 // Starts at the current real time when the process starts, so a restart moves simulated

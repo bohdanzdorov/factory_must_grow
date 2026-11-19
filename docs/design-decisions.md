@@ -157,6 +157,8 @@ If any step fails, everything rolls back and no acknowledgement is sent, so the 
 
 The demo runs on a simulated clock that is faster than real time, set by `CLOCK_SCALE` (default 60, so a 30-minute job takes 30 real seconds). It starts at the real time when the process starts.
 
+- **There is exactly one clock: the backend's** (`apps/backend/src/domain/clock.ts`, created in `config/clock.ts`). Other processes read it from `GET /api/clock` instead of running their own, because two scaled clocks started at different real times drift apart. The UI ticks between polls by estimating from the last reading and the scale (`hooks/useSimulatedTime.ts`); the simulator (W3) will read it the same way.
+
 - **The rule: anything stored or compared uses simulated time.** That covers deadlines, planned job times, `createdAt`, `receivedAt` and `lastHeartbeatAt`, plus every comparison: deadlines, dispatching, expiry and heartbeat timeouts.
 - **Real time is used only for** how often background loops run, and for log timestamps.
 - Database columns have no `now()` defaults, so the app always passes `clock.now()`. A forgotten time is a type error, not a silently wrong value.

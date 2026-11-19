@@ -1,4 +1,4 @@
-import { createManualClock, type ManualClock } from '@factorymustgrow/shared';
+import { createManualClock, type ManualClock } from '../../src/domain/clock.js';
 import { setClock } from '../../src/config/clock.js';
 
 // Makes the app use a clock that only moves when the test moves it.

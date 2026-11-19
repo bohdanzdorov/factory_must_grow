@@ -1,4 +1,5 @@
-import { ClockStateSchema, createManualClock, createScaledClock } from '@factorymustgrow/shared';
+import { ClockStateSchema } from '@factorymustgrow/shared';
+import { createManualClock, createScaledClock } from '../src/domain/clock.js';
 import { describe, expect, it } from 'vitest';
 import { api } from './helpers/api.js';
 import { useManualClock } from './helpers/clock.js';
