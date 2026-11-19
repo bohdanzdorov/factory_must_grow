@@ -15,4 +15,6 @@ export const enumsInSync: [
   Equals<Db.RoutingDecisionKind, Shared.RoutingDecisionKind>,
   Equals<Db.RoutingDecisionStatus, Shared.RoutingDecisionStatus>,
   Equals<Db.CandidateRejectionReason, Shared.CandidateRejectionReason>,
-] = [true, true, true, true, true, true, true, true];
+  Equals<Db.MachineEventType, Shared.MachineEventType>,
+  Equals<Db.CommandType, Shared.CommandType>,
+] = [true, true, true, true, true, true, true, true, true, true];

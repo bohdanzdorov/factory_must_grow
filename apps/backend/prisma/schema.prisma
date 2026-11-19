@@ -88,6 +88,10 @@ enum MachineEventType {
   JOB_STARTED
   JOB_COMPLETED
   MACHINE_FAILURE
+  // Confirms CANCEL_JOB: the job is not running on the machine (any more).
+  JOB_CANCELLED
+  // Confirms RESET: the machine is IDLE again.
+  MACHINE_RESET
 
   @@map("machine_event_type")
 }

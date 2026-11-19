@@ -13,7 +13,8 @@
   "scripts": {
     "dev": "npm run dev -w @factorymustgrow/backend",
     "dev:frontend": "npm run dev -w @factorymustgrow/frontend",
-    "test": "npm run test -w @factorymustgrow/backend",
+    "sim": "npm run sim -w @factorymustgrow/simulator --",
+    "test": "npm run test -w @factorymustgrow/backend && npm run test -w @factorymustgrow/simulator",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

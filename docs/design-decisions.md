@@ -120,16 +120,41 @@ A decision is decided exactly once: `PROPOSED` may become `APPROVED`, `REJECTED`
 ## Commands
 
 - Commands not yet acknowledged are resent in heartbeat responses. The simulator ignores command ids it has already seen.
-- `START_JOB` becomes `ACKED` on `job_started`, and `FAIL` on `machine_failure`.
+- **Every command has an event that confirms it** and makes it `ACKED`: `START_JOB` → `JOB_STARTED`, `FAIL` → `MACHINE_FAILURE`, `CANCEL_JOB` → `JOB_CANCELLED`, `RESET` → `MACHINE_RESET`. An event, not the next heartbeat, because events are deduplicated and ordered by `seq`, and they show up in the event log.
+- A machine confirms a command even when it is already where the command wants it: `CANCEL_JOB` for a job it isn't running (it finished while the machine was offline, say), `RESET` while `IDLE`, `FAIL` while not `RUNNING`. Otherwise the command would never be acknowledged and would be resent forever.
+- The exception is `START_JOB` on a busy machine: it waits, unconfirmed, until the machine is `IDLE`.
 - Unfinished commands for a failed machine become `CANCELLED`.
 - The dispatcher waits until a machine is `IDLE` before starting its next job.
+- `MACHINE_RESET` is what makes a machine available again (W3-06), so recovery comes from an event that is safe to process twice, not from a heartbeat that happens to say `IDLE`.
 
 ## Events
 
 - Only events use `seq`. Heartbeats do not, so a retried event cannot look stale because heartbeats moved the counter on.
 - Events are sent in order.
 - The simulator starts `seq` from `Date.now()`, so events after a restart are not treated as stale.
-- Events for a job that is no longer `RUNNING` are stored but change nothing.
+- Events for a job that is no longer `RUNNING` are stored but change nothing. `JOB_CANCELLED` usually arrives for a job the backend has already `RELEASED`; it only acknowledges the command and frees the machine.
+
+## Simulator
+
+`apps/simulator` pretends to be one machine's controller; start one process per machine. The backend can't tell it from a real machine, because it only sees the messages (`packages/shared/src/ingest.ts`).
+
+| Input                        | From       | To      | Event sent                                       |
+| ---------------------------- | ---------- | ------- | ------------------------------------------------ |
+| `START_JOB`                  | `IDLE`     | RUNNING | `JOB_STARTED`                                    |
+| job's duration has passed    | `RUNNING`  | IDLE    | `JOB_COMPLETED`                                  |
+| `FAIL`                       | any        | ERROR   | `MACHINE_FAILURE` (with job)                     |
+| `CANCEL_JOB` for its own job | `RUNNING`  | IDLE    | `JOB_CANCELLED`                                  |
+| `CANCEL_JOB` for another job | any        | same    | `JOB_CANCELLED`                                  |
+| `RESET`                      | any        | IDLE    | `JOB_CANCELLED` if running, then `MACHINE_RESET` |
+| `START_JOB`                  | not `IDLE` | same    | none; waits, and is resent                       |
+
+- The state machine is a pure function (`src/domain/machine.ts`); the I/O lives around it.
+- Every real second: check whether the running job has finished, send queued events, send a heartbeat (`state` and `jobId`), carry out the returned commands, send their events. Events go before the heartbeat, so the backend hears `JOB_COMPLETED` before a heartbeat saying `IDLE`.
+- **Jobs run on simulated time.** A job lasts `plannedEnd − plannedStart` of simulated time from when its command arrives, and finishes once the backend's simulated time passes that point. The simulator reads that time from `GET /api/clock` at startup and every 30 real seconds, and estimates it in between from the scale, like the UI.
+- **Retries and seq use real time.** Simulated time is for the factory (jobs, deadlines, heartbeat timeouts); real time is for the computers (retry delays, request timeouts, how often loops run). A backend that is down doesn't recover 60× faster, so a backoff in simulated time would hammer it. `seq` starts at the real time because it must never go backwards, and the simulated clock does go back when the backend restarts.
+- **At-least-once delivery:** events wait in an in-memory outbox and are sent one at a time, in order. Each stays at the front until the backend answers 2xx, retrying with backoff (0.5 s, doubling to 5 s, in real time), so a lost response means a real duplicate. Only a 400 drops an event, because sending it again cannot help.
+- A heartbeat that fails is not retried; the next one follows a second later. The machine keeps running while the backend is down.
+- The outbox is in memory, so undelivered events are lost if the process stops. A real controller would persist them; here the backend's missed-heartbeat timeout covers a machine that disappears.
 
 ## Failure handling
 
@@ -169,4 +194,4 @@ The demo runs on a simulated clock that is faster than real time, set by `CLOCK_
 
 ## Still open
 
-- **`ACKED` triggers for `RESET` and `CANCEL_JOB` (W3):** the plan has no event type confirming either one.
+Nothing at the moment.

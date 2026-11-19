@@ -53,3 +53,17 @@ export const CandidateRejectionReasonSchema = z.enum([
   'NO_SHIPPING_ROUTE',
 ]);
 export type CandidateRejectionReason = z.infer<typeof CandidateRejectionReasonSchema>;
+
+// What a machine reports. Each command has an event that confirms it:
+// START_JOB → JOB_STARTED, FAIL → MACHINE_FAILURE, CANCEL_JOB → JOB_CANCELLED, RESET → MACHINE_RESET.
+export const MachineEventTypeSchema = z.enum([
+  'JOB_STARTED',
+  'JOB_COMPLETED',
+  'MACHINE_FAILURE',
+  'JOB_CANCELLED',
+  'MACHINE_RESET',
+]);
+export type MachineEventType = z.infer<typeof MachineEventTypeSchema>;
+
+export const CommandTypeSchema = z.enum(['START_JOB', 'FAIL', 'RESET', 'CANCEL_JOB']);
+export type CommandType = z.infer<typeof CommandTypeSchema>;

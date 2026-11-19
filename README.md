@@ -54,6 +54,14 @@ Requires Node.js 22.13+ and Docker Desktop.
 
    The UI forwards `/api` requests to the API, so both must be running. All times shown are simulated (60× real time by default), so a proposal must be approved within about 2 real minutes.
 
+7. To simulate a machine, start one simulator per machine, each in its own terminal, with a site and machine id from the [seed data](docs/seed-data.md):
+
+   ```bash
+   npm run sim -- --site HAM --machine HAM-MILL5-1
+   ```
+
+   It sends a heartbeat every second and reports job and failure events. It reads simulated time from the API, so it can be started before or after it. `--api <url>` (or `SIM_API_URL`) points it at another API, and `INGEST_TOKEN` sets the token it sends. The heartbeat and event endpoints arrive in W3-02; until then the simulator logs that they are missing and keeps retrying.
+
 ## Running tests
 
 With PostgreSQL running (`npm run db:up`):
@@ -64,6 +72,6 @@ npm test
 
 Tests use a separate database, `factorymustgrow_test`, which they create and migrate automatically. Every table is emptied before each test, so your development data is never touched. To point tests at another database, set `TEST_DATABASE_URL`; its name must end in `_test`.
 
-Use `npm run test:watch -w @factorymustgrow/backend` to rerun tests on every change. Test files live in `apps/backend/test/`.
+Use `npm run test:watch -w @factorymustgrow/backend` to rerun tests on every change. Test files live in `apps/backend/test/`. The simulator's tests (`apps/simulator/test/`) need no database; run them alone with `npm test -w @factorymustgrow/simulator`.
 
 Run commands for the demo will be added as those parts are built.
