@@ -20,5 +20,18 @@ export function machinesModel(db: DbClient) {
     findById(id: string): Promise<MachineRecord | null> {
       return db.machine.findUnique({ where: { id }, include: machineInclude });
     },
+
+    async exists(id: string): Promise<boolean> {
+      return (await db.machine.count({ where: { id } })) > 0;
+    },
+
+    // Records when the machine was last heard from; false if there is no such machine.
+    async recordHeartbeat(id: string, at: Date): Promise<boolean> {
+      const { count } = await db.machine.updateMany({
+        where: { id },
+        data: { lastHeartbeatAt: at },
+      });
+      return count === 1;
+    },
   };
 }

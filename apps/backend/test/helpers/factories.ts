@@ -2,8 +2,11 @@
 // only states what matters to it.
 import { getClock } from '../../src/config/clock.js';
 import { prisma } from '../../src/config/prisma.js';
+import type { Prisma } from '../../src/generated/prisma/client.js';
 import type {
   Capability,
+  CommandStatus,
+  CommandType,
   JobStatus,
   MachineStatus,
   OrderStatus,
@@ -136,4 +139,26 @@ export async function createJob(
   return prisma.job.create({
     data: { ...fields, machineId, routingDecisionId, plannedStart, plannedEnd },
   });
+}
+
+// A command for a machine. Without a machine, a new one is created for it.
+// By default an empty RESET, PENDING, created at the clock's current time.
+export async function createCommand(
+  overrides: {
+    machineId?: string;
+    type?: CommandType;
+    payload?: Prisma.InputJsonValue;
+    status?: CommandStatus;
+    createdAt?: Date;
+  } = {},
+) {
+  const {
+    machineId = (await createMachine()).id,
+    type = 'RESET',
+    payload = {},
+    createdAt = getClock().now(),
+    ...fields
+  } = overrides;
+
+  return prisma.command.create({ data: { ...fields, machineId, type, payload, createdAt } });
 }

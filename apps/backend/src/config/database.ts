@@ -1,5 +1,7 @@
+import { commandsModel } from '../models/commands.model.js';
 import { healthModel } from '../models/health.model.js';
 import { jobsModel } from '../models/jobs.model.js';
+import { machineEventsModel } from '../models/machine-events.model.js';
 import { machinesModel } from '../models/machines.model.js';
 import { ordersModel } from '../models/orders.model.js';
 import { routingDecisionsModel } from '../models/routing-decisions.model.js';
@@ -17,6 +19,8 @@ function createModels(client: DbClient) {
     jobs: jobsModel(client),
     routingDecisions: routingDecisionsModel(client),
     shippingLeadTimes: shippingLeadTimesModel(client),
+    machineEvents: machineEventsModel(client),
+    commands: commandsModel(client),
   };
 }
 

@@ -15,6 +15,7 @@ export default defineConfig({
       LOG_LEVEL: 'error',
       // Fixed, so tests don't depend on a value in .env.
       APPROVAL_WINDOW_SECONDS: '120',
+      INGEST_TOKEN: 'test-ingest-token-0123456789',
     },
     globalSetup: ['./test/global-setup.ts'],
     setupFiles: ['./test/setup.ts'],

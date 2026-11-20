@@ -26,7 +26,7 @@ Requires Node.js 22.13+ and Docker Desktop.
    npm install
    ```
 
-2. Copy `apps/backend/.env.example` to `apps/backend/.env`.
+2. Copy `apps/backend/.env.example` to `apps/backend/.env`, and `apps/simulator/.env.example` to `apps/simulator/.env`. The two `INGEST_TOKEN` values must match: it is the shared secret machines send with their heartbeats and events.
 
 3. Start PostgreSQL (exposed on `localhost:5433`), apply migrations and load the [seed data](docs/seed-data.md):
 
@@ -60,7 +60,7 @@ Requires Node.js 22.13+ and Docker Desktop.
    npm run sim -- --site HAM --machine HAM-MILL5-1
    ```
 
-   It sends a heartbeat every second and reports job and failure events. It reads simulated time from the API, so it can be started before or after it. `--api <url>` (or `SIM_API_URL`) points it at another API, and `INGEST_TOKEN` sets the token it sends. The heartbeat and event endpoints arrive in W3-02; until then the simulator logs that they are missing and keeps retrying.
+   It sends a heartbeat every second, carries out the commands it gets back, and reports job and failure events. It reads simulated time from the API, so it can be started before or after it. It reads `SIM_API_URL` and `INGEST_TOKEN` from `apps/simulator/.env`; `--api <url>` overrides the URL. Successful heartbeats are not logged by the API, so its log stays readable with many machines running.
 
 ## Running tests
 

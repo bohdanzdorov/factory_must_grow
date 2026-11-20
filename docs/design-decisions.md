@@ -134,6 +134,40 @@ A decision is decided exactly once: `PROPOSED` may become `APPROVED`, `REJECTED`
 - The simulator starts `seq` from `Date.now()`, so events after a restart are not treated as stale.
 - Events for a job that is no longer `RUNNING` are stored but change nothing. `JOB_CANCELLED` usually arrives for a job the backend has already `RELEASED`; it only acknowledges the command and frees the machine.
 
+## Ingest API
+
+The two endpoints machines use. The request and response shapes are in `packages/shared/src/ingest.ts`.
+
+- **Both need the shared `INGEST_TOKEN`**, sent as `Authorization: Bearer <token>`; anything else gets 401. One fake `MACHINE_FAILURE` would release jobs and reroute orders, so these are the only endpoints that are protected. It is one secret for all machines, not a login: enough to keep out anything that isn't ours, not to tell machines apart. The token is compared in constant time.
+- The check is attached to each ingest route, not with `router.use`, because the ingest routes share `/api/machines` with the UI's reads, which need no token.
+
+**`POST /api/machines/:id/heartbeat`**, in one transaction:
+
+1. Set `lastHeartbeatAt` to the simulated time (404 if there is no such machine).
+2. Return the machine's `PENDING` and `DELIVERED` commands, oldest first, and mark the `PENDING` ones `DELIVERED`.
+
+- `DELIVERED` means the command was handed out at least once, not that the machine got it; only its confirming event makes it `ACKED`. Until then it is sent with every heartbeat, so a lost response loses nothing.
+- **A heartbeat never changes `Machine.status`.** Status changes come from events, which are deduplicated and ordered. The reported `state` and `jobId` are checked but not used yet; W3-04 and W3-06 use them to spot a machine that comes back.
+- A stored command that doesn't match the shared schema is logged and skipped. A 500 would block every heartbeat from that machine, which would then be marked offline and have its work rerouted because of one bad row.
+- Successful heartbeats are not written to the request log (10 machines would add 10 lines a second); failed ones are.
+
+**`POST /api/machines/:id/events`**, in one transaction:
+
+1. Store the event with `receivedAt` set to the simulated time (404 if there is no such machine, 400 if the body is invalid).
+2. If an event with the same `(machineId, eventId)` is already stored, reply `{ result: 'DUPLICATE' }` and stop. It is a resend whose first attempt got through; processing it again would apply it twice. Stored with `ON CONFLICT DO NOTHING` rather than by catching the unique-constraint error, because an error inside a Postgres transaction aborts the whole transaction.
+3. Acknowledge the command the event confirms, and reply `{ result: 'STORED' }`:
+
+| Event             | Acknowledges                           |
+| ----------------- | -------------------------------------- |
+| `JOB_STARTED`     | the `START_JOB` with the same `jobId`  |
+| `JOB_CANCELLED`   | the `CANCEL_JOB` with the same `jobId` |
+| `MACHINE_FAILURE` | every open `FAIL` for the machine      |
+| `MACHINE_RESET`   | every open `RESET` for the machine     |
+| `JOB_COMPLETED`   | nothing                                |
+
+- Events are stored whatever the machine's status, including `OFFLINE`.
+- What an event does to the machine, its jobs and its orders comes later: the stale-`seq` check in W3-03, failures in W3-04, job lifecycle in W3-10.
+
 ## Simulator
 
 `apps/simulator` pretends to be one machine's controller; start one process per machine. The backend can't tell it from a real machine, because it only sees the messages (`packages/shared/src/ingest.ts`).

@@ -1,5 +1,7 @@
 // Pretends to be one machine's controller. Start one process per machine:
 //   npm run sim -- --site HAM --machine HAM-MILL5-1
+// Reads apps/simulator/.env (SIM_API_URL, INGEST_TOKEN) into process.env.
+import 'dotenv/config';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pino } from 'pino';
 import { ApiError, createApiClient, type BackendApi } from './transport/api-client.js';

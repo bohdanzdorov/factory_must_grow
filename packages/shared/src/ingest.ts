@@ -73,3 +73,10 @@ export const MachineEventRequestSchema = z.object({
   }),
 });
 export type MachineEventRequest = z.infer<typeof MachineEventRequestSchema>;
+
+// Response of POST /api/machines/:id/events. DUPLICATE: the backend already had this event
+// (the first attempt got through, only its response was lost), so the machine can move on.
+export const MachineEventResponseSchema = z.object({
+  result: z.enum(['STORED', 'DUPLICATE']),
+});
+export type MachineEventResponse = z.infer<typeof MachineEventResponseSchema>;
