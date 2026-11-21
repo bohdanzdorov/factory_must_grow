@@ -28,6 +28,17 @@ export function machinesModel(db: DbClient) {
       return (await db.machine.count({ where: { id } })) > 0;
     },
 
+    // Reads the machine's current status and holds a shared lock on its row until the
+    // transaction ends. A failure in progress on this machine (which holds the row while it
+    // changes the status) makes this wait until the failure is saved, so the status read here
+    // is never one that is about to change. Null if there is no such machine.
+    async lockAndReadStatus(id: string): Promise<MachineStatus | null> {
+      const rows = await db.$queryRaw<{ status: MachineStatus }[]>`
+        SELECT status::text AS status FROM machine WHERE id = ${id} FOR SHARE
+      `;
+      return rows[0]?.status ?? null;
+    },
+
     // Records when the machine was last heard from; false if there is no such machine.
     async recordHeartbeat(id: string, at: Date): Promise<boolean> {
       const { count } = await db.machine.updateMany({

@@ -2,42 +2,18 @@
 // its candidates and the job holding the slot, all in one transaction.
 import type { OrderDecisionResult, RoutingDecision } from '@factorymustgrow/shared';
 import { getClock } from '../config/clock.js';
-import { db, transaction, type Models } from '../config/database.js';
+import { db, type Models } from '../config/database.js';
 import { env } from '../config/env.js';
-import { logger } from '../config/logger.js';
 import { canChangeOrderStatus } from '../domain/order-status.js';
 import { routeOrder as decideRoute } from '../domain/routing.js';
-import { isConcurrentBookingConflict, isJobOverlapError } from '../errors/database-errors.js';
 import { HttpError } from '../errors/http-error.js';
+import type { Order, RoutingDecisionKind } from '../generated/prisma/client.js';
 import { toOrder } from '../mappers/order.mapper.js';
 import { toNewCandidates, toRoutingDecision } from '../mappers/routing-decision.mapper.js';
-
-// If another request books the same slot at the same moment, saving the job fails (as an
-// overlap, or as a deadlock when both write at the same instant) and everything rolls back.
-// Routing again with fresh data finds the next slot.
-// One first try plus 4 retries. Requests routed at the same moment all pick the same slot,
-// so each round only one of them wins; more retries let a burst of requests get through.
-const MAX_ATTEMPTS = 5;
+import { ChosenMachineFailedError, inBookingTransaction } from './booking-retry.service.js';
 
 export async function routeOrder(orderId: string): Promise<OrderDecisionResult> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await transaction((tx) => routeOnce(tx, orderId));
-    } catch (err) {
-      if (!isConcurrentBookingConflict(err)) throw err;
-
-      if (attempt >= MAX_ATTEMPTS) {
-        throw new HttpError(
-          409,
-          'Could not book a slot because machines are being booked at the same time. Try again.',
-        );
-      }
-      logger.info(
-        { orderId, attempt, conflict: isJobOverlapError(err) ? 'overlap' : 'deadlock' },
-        'Another request was booking at the same moment; retrying',
-      );
-    }
-  }
+  return inBookingTransaction((tx) => routeOnce(tx, orderId), { orderId });
 }
 
 async function routeOnce(tx: Models, orderId: string): Promise<OrderDecisionResult> {
@@ -60,6 +36,44 @@ async function routeOnce(tx: Models, orderId: string): Promise<OrderDecisionResu
     );
   }
 
+  const proposal = await proposeRoute(tx, order, { kind: 'INITIAL', supersedesId: null });
+
+  const updatedOrder = proposal.booked
+    ? await tx.orders.updateStatus(orderId, 'ROUTED', null)
+    : await tx.orders.updateStatus(orderId, 'BLOCKED', proposal.explanation);
+
+  // Read back, so the response includes the job created inside proposeRoute.
+  const saved = await tx.routingDecisions.findById(proposal.decisionId);
+  if (!saved) {
+    throw new Error(
+      `Routing decision ${proposal.decisionId} disappeared inside its own transaction`,
+    );
+  }
+
+  return { order: toOrder(updatedOrder), decision: toRoutingDecision(saved) };
+}
+
+export interface ProposedRoute {
+  decisionId: string;
+  // True if a machine was chosen and its slot booked; false if no machine fits.
+  booked: boolean;
+  explanation: string;
+}
+
+// Routes the order and saves the result: a PROPOSED decision with its job booked, or a
+// NO_ELIGIBLE_MACHINE decision with no job. Doesn't change the order's status; the caller
+// does that (ROUTED for a first routing, REROUTE_PENDING for a reroute, or BLOCKED).
+//
+// `kind` and `supersedesId` say whether this is a first routing or a reroute, and which
+// decision it replaces. `reason`, if given, starts the explanation (why it was rerouted).
+//
+// Throws a booking conflict or ChosenMachineFailedError when something changed at the same
+// moment; run it inside inBookingTransaction, which routes again.
+export async function proposeRoute(
+  tx: Models,
+  order: Order,
+  options: { kind: RoutingDecisionKind; supersedesId: string | null; reason?: string },
+): Promise<ProposedRoute> {
   const clock = getClock();
   const now = clock.now();
 
@@ -67,7 +81,7 @@ async function routeOnce(tx: Models, orderId: string): Promise<OrderDecisionResu
   const sites = await tx.sites.findAll();
   const reservations = await tx.jobs.findActiveReservations(now);
   const shippingDays = await tx.shippingLeadTimes.daysToDestination(order.destination);
-  const excludedMachineIds = await tx.routingDecisions.findRejectedMachineIds(orderId);
+  const excludedMachineIds = await tx.routingDecisions.findRejectedMachineIds(order.id);
 
   const result = decideRoute({
     order,
@@ -91,13 +105,28 @@ async function routeOnce(tx: Models, orderId: string): Promise<OrderDecisionResu
 
   const chosen = result.chosen;
 
+  if (chosen) {
+    // The machines were read without a lock, so the chosen one may have failed since. Lock
+    // it and look again: if it failed, nothing is saved and routing runs again. This also
+    // makes a failure in progress on it finish first, so we never book on a machine whose
+    // jobs the failure has already collected.
+    const status = await tx.machines.lockAndReadStatus(chosen.machineId);
+    if (status === 'ERROR' || status === 'OFFLINE') {
+      throw new ChosenMachineFailedError(chosen.machineId);
+    }
+  }
+
+  const explanation = options.reason
+    ? `${options.reason} ${result.explanation}`
+    : result.explanation;
+
   const decision = await tx.routingDecisions.insert({
-    orderId,
-    kind: 'INITIAL',
+    orderId: order.id,
+    kind: options.kind,
     status: chosen ? 'PROPOSED' : 'NO_ELIGIBLE_MACHINE',
     chosenMachineId: chosen?.machineId ?? null,
-    explanation: result.explanation,
-    supersedesId: null,
+    explanation,
+    supersedesId: options.supersedesId,
     createdAt: now,
     candidates: toNewCandidates(result),
   });
@@ -118,17 +147,7 @@ async function routeOnce(tx: Models, orderId: string): Promise<OrderDecisionResu
     });
   }
 
-  const updatedOrder = chosen
-    ? await tx.orders.updateStatus(orderId, 'ROUTED', null)
-    : await tx.orders.updateStatus(orderId, 'BLOCKED', result.explanation);
-
-  // Read back, so the response includes the job created above.
-  const saved = await tx.routingDecisions.findById(decision.id);
-  if (!saved) {
-    throw new Error(`Routing decision ${decision.id} disappeared inside its own transaction`);
-  }
-
-  return { order: toOrder(updatedOrder), decision: toRoutingDecision(saved) };
+  return { decisionId: decision.id, booked: chosen !== null, explanation };
 }
 
 export async function listDecisions(orderId: string): Promise<RoutingDecision[]> {

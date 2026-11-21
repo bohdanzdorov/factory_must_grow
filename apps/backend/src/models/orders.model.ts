@@ -38,6 +38,23 @@ export function ordersModel(db: DbClient) {
       return rows.length > 0;
     },
 
+    // Locks several orders like lockById, always in id order: two transactions locking an
+    // overlapping set of orders then queue up instead of deadlocking.
+    async lockByIds(ids: string[]): Promise<void> {
+      if (ids.length === 0) return;
+      await db.$queryRaw`
+        SELECT id FROM orders WHERE id = ANY(${ids}) ORDER BY id FOR UPDATE
+      `;
+    },
+
+    // The orders with these ids, most urgent deadline first (id breaks ties).
+    findManyByIdsByDeadline(ids: string[]): Promise<Order[]> {
+      return db.order.findMany({
+        where: { id: { in: ids } },
+        orderBy: [{ deadline: 'asc' }, { id: 'asc' }],
+      });
+    },
+
     updateStatus(id: string, status: OrderStatus, blockedReason: string | null): Promise<Order> {
       return db.order.update({ where: { id }, data: { status, blockedReason } });
     },

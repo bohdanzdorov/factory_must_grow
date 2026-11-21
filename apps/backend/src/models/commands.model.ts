@@ -1,5 +1,5 @@
 import type { DbClient } from '../config/prisma.js';
-import type { Command, CommandStatus, CommandType } from '../generated/prisma/client.js';
+import type { Command, CommandStatus, CommandType, Prisma } from '../generated/prisma/client.js';
 
 // Commands the machine hasn't confirmed yet. Both are sent in every heartbeat response:
 // DELIVERED means it was handed out at least once, not that the machine received it.
@@ -23,6 +23,39 @@ export function commandsModel(db: DbClient) {
         data: { status: 'DELIVERED' },
       });
       return count;
+    },
+
+    // Queues a command for the machine; it is sent with its next heartbeat.
+    insert(data: {
+      machineId: string;
+      type: CommandType;
+      payload: Prisma.InputJsonValue;
+      createdAt: Date;
+    }): Promise<Command> {
+      return db.command.create({ data });
+    },
+
+    // Marks the machine's open commands of this type CANCELLED; returns how many changed.
+    async cancelOpen(machineId: string, type: CommandType): Promise<number> {
+      const { count } = await db.command.updateMany({
+        where: { machineId, type, status: { in: OPEN_COMMAND_STATUSES } },
+        data: { status: 'CANCELLED' },
+      });
+      return count;
+    },
+
+    // Whether a START_JOB for this job was ever handed to the machine (DELIVERED or ACKED),
+    // so the machine may have started it.
+    async wasStartSent(machineId: string, jobId: string): Promise<boolean> {
+      const count = await db.command.count({
+        where: {
+          machineId,
+          type: 'START_JOB',
+          status: { in: ['DELIVERED', 'ACKED'] },
+          payload: { path: ['jobId'], equals: jobId },
+        },
+      });
+      return count > 0;
     },
 
     // Marks the machine's open commands of this type ACKED; returns how many changed.

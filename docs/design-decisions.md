@@ -123,7 +123,7 @@ A decision is decided exactly once: `PROPOSED` may become `APPROVED`, `REJECTED`
 - **Every command has an event that confirms it** and makes it `ACKED`: `START_JOB` → `JOB_STARTED`, `FAIL` → `MACHINE_FAILURE`, `CANCEL_JOB` → `JOB_CANCELLED`, `RESET` → `MACHINE_RESET`. An event, not the next heartbeat, because events are deduplicated and ordered by `seq`, and they show up in the event log.
 - A machine confirms a command even when it is already where the command wants it: `CANCEL_JOB` for a job it isn't running (it finished while the machine was offline, say), `RESET` while `IDLE`, `FAIL` while not `RUNNING`. Otherwise the command would never be acknowledged and would be resent forever.
 - The exception is `START_JOB` on a busy machine: it waits, unconfirmed, until the machine is `IDLE`.
-- Unfinished commands for a failed machine become `CANCELLED`.
+- When a machine fails, its open `START_JOB` commands become `CANCELLED`; other commands stay (see "Failure handling").
 - The dispatcher waits until a machine is `IDLE` before starting its next job.
 - `MACHINE_RESET` is what makes a machine available again (W3-06), so recovery comes from an event that is safe to process twice, not from a heartbeat that happens to say `IDLE`.
 
@@ -212,7 +212,7 @@ The backend learns that a machine has failed in one of two ways, and both call t
 | It says so: a new (not stale, not duplicate) `MACHINE_FAILURE` event | `ERROR`         | `IDLE`, `RUNNING`, `OFFLINE` |
 | It goes silent: no heartbeat for `HEARTBEAT_TIMEOUT_SECONDS` (10 s)  | `OFFLINE`       | `IDLE`, `RUNNING`            |
 
-- Routing already skips `ERROR` and `OFFLINE` machines, so a failed machine gets no new work. Its existing jobs are not moved yet; that is the next step (see "Failure handling").
+- Routing already skips `ERROR` and `OFFLINE` machines, so a failed machine gets no new work. Its existing jobs move elsewhere in the same transaction (see "Failure handling").
 - **`OFFLINE` → `ERROR`:** a machine we couldn't hear that comes back saying it is broken is broken.
 - **`ERROR` doesn't become `OFFLINE`** when it goes quiet: it is already unavailable, and recovery stays simple (`ERROR` ends with `MACHINE_RESET`, `OFFLINE` ends when heartbeats return).
 - **A machine that has never sent a heartbeat is not watched.** Seeded machines have no simulator until one is started; marking them all `OFFLINE` would leave routing with nothing, and nothing brings a machine back yet. To revisit once recovery exists.
@@ -224,19 +224,25 @@ The backend learns that a machine has failed in one of two ways, and both call t
 
 ## Failure handling
 
-A failure is handled in one transaction, triggered by a `machine_failure` event or by a missed-heartbeat timeout. It is safe to run twice.
+Once a machine is marked failed, its work moves elsewhere in the same transaction (`handleMachineFailure` in `services/machine-failure.service.ts`). For a failure event, that transaction also stores the event, so a duplicate stops before any of this.
 
-1. Store the event. If it is a duplicate, stop and reply OK.
-2. Set the machine to `ERROR`, or `OFFLINE` for a timeout.
-3. Set the running job and all future `PLANNED` jobs on that machine to `RELEASED`.
-4. Set open proposals on it to `SUPERSEDED`, and their jobs to `CANCELLED`.
-5. Set its unfinished commands to `CANCELLED`.
-6. Route each affected order, earliest deadline first. The order becomes `REROUTE_PENDING` with a new proposal, or `BLOCKED` with a reason.
+1. **Status:** the machine becomes `ERROR` or `OFFLINE` (see "Failure detection"). If it was already failed, stop: this is what makes running it twice safe.
+2. **Lock the affected orders** (those with jobs on the machine), always in id order, so an approval or rejection at the same moment waits instead of clashing, and two failures can't deadlock. Then read the jobs again, in case one of those just changed them.
+3. **Free each active job:**
 
-If any step fails, everything rolls back and no acknowledgement is sent, so the retry runs it again.
+| The job belonged to                                        | Job becomes | Its decision becomes |
+| ---------------------------------------------------------- | ----------- | -------------------- |
+| an approved decision (order `APPROVED` or `IN_PRODUCTION`) | `RELEASED`  | stays `APPROVED`     |
+| a proposal (order `ROUTED` or `REROUTE_PENDING`)           | `CANCELLED` | `SUPERSEDED`         |
 
+4. **Cancel the machine's open `START_JOB` commands.** Only those: a queued `RESET` is how a broken machine comes back, and a queued `CANCEL_JOB` must still reach it. This comes after step 3, which needs to see which `START_JOB`s were already handed out.
+5. **Reroute each affected order, most urgent deadline first**, so it gets the first free slot. Routing skips the failed machine on its own. The new decision is `kind: REROUTE` with `supersedesId` pointing at the decision it replaces, and its explanation starts with the reason ("Machine HAM-1 failed (ERROR)."). A machine is found: the job is booked and the order becomes `REROUTE_PENDING`, waiting for approval (rule 8). None fits: the decision is `NO_ELIGIBLE_MACHINE` and the order becomes `BLOCKED` with that explanation as its reason. The released job is kept either way, so nothing is lost.
+
+- **An `OFFLINE` machine may still be running** (it only lost its network). For each released job it may have started (the job was `RUNNING`, or its `START_JOB` was handed out), a `CANCEL_JOB` is queued straight away and goes out with the machine's first heartbeat when it reconnects. The simulator confirms a `CANCEL_JOB` even for a job it isn't running, so sending one is always safe. A machine in `ERROR` has already dropped its job.
+- **If a reroute booking clashes** with another request booking at the same moment, the whole transaction rolls back and runs again, up to 5 attempts, like routing (`services/booking-retry.service.ts`). A failure event then answers 409 and the machine resends it; the monitor tries again on its next check.
+- **Routing never books on a machine that just failed.** Routing reads the machines without a lock, so the chosen one may have failed since. Just before booking, it locks the chosen machine's row and reads its status again; if it is now `ERROR` or `OFFLINE`, nothing is saved and routing runs again. The lock also makes a failure in progress on that machine finish first, so a job can't land on it after the failure has collected its jobs.
+- The transaction may run for up to 10 seconds (`config/database.ts`), plenty for ten machines.
 - A machine that failed midway restarts the full quantity elsewhere. Partial progress is not modeled in v1.
-- A machine marked `OFFLINE` may still be running, so it receives `CANCEL_JOB` when it reconnects.
 
 ## Site down
 

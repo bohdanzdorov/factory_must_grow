@@ -1,6 +1,6 @@
 import type { DbClient } from '../config/prisma.js';
 import type { Reservation } from '../domain/routing.js';
-import type { Job, JobStatus } from '../generated/prisma/client.js';
+import type { Job, JobStatus, RoutingDecisionStatus } from '../generated/prisma/client.js';
 
 export interface NewJob {
   routingDecisionId: string;
@@ -14,6 +14,10 @@ export interface NewJob {
 // Jobs in these statuses hold their time slot. Must match the WHERE clause of the
 // job_no_overlap constraint in prisma/migrations/*_add_job_no_overlap/migration.sql.
 export const ACTIVE_JOB_STATUSES: JobStatus[] = ['PLANNED', 'RUNNING'];
+
+export type ActiveJobOnMachine = Job & {
+  routingDecision: { id: string; status: RoutingDecisionStatus; orderId: string };
+};
 
 export function jobsModel(db: DbClient) {
   return {
@@ -34,6 +38,25 @@ export function jobsModel(db: DbClient) {
         data: { status: to },
       });
       return count;
+    },
+
+    // The machine's active jobs (PLANNED or RUNNING), each with its decision's id and status
+    // and its order's id, oldest planned start first. Used when the machine fails.
+    findActiveOnMachine(machineId: string): Promise<ActiveJobOnMachine[]> {
+      return db.job.findMany({
+        where: { machineId, status: { in: ACTIVE_JOB_STATUSES } },
+        include: { routingDecision: { select: { id: true, status: true, orderId: true } } },
+        orderBy: [{ plannedStart: 'asc' }, { id: 'asc' }],
+      });
+    },
+
+    // Moves the job to `to` if it is still active (PLANNED or RUNNING); returns whether it did.
+    async changeStatusIfActive(id: string, to: JobStatus): Promise<boolean> {
+      const { count } = await db.job.updateMany({
+        where: { id, status: { in: ACTIVE_JOB_STATUSES } },
+        data: { status: to },
+      });
+      return count === 1;
     },
 
     // Every slot held by an active job, in the shape routing expects. Pass `endingAfter` to

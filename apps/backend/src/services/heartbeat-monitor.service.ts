@@ -1,8 +1,9 @@
 // Finds machines that stopped sending heartbeats and marks them OFFLINE.
 // Runs every few real seconds in the background (see index.ts); tests call it directly.
 import { getClock } from '../config/clock.js';
-import { db, transaction } from '../config/database.js';
+import { db } from '../config/database.js';
 import { env } from '../config/env.js';
+import { inBookingTransaction } from './booking-retry.service.js';
 import { handleMachineFailure } from './machine-failure.service.js';
 
 // How often the check runs, in real milliseconds.
@@ -24,8 +25,9 @@ export async function markSilentMachinesOffline(): Promise<string[]> {
   // One transaction per machine: one machine's failure handling can't hold up or undo
   // another's.
   for (const machineId of await db.machines.findSilentSince(cutoff)) {
-    const changed = await transaction((tx) =>
-      handleMachineFailure(tx, machineId, { type: 'SILENT', lastHeartbeatBefore: cutoff }),
+    const changed = await inBookingTransaction(
+      (tx) => handleMachineFailure(tx, machineId, { type: 'SILENT', lastHeartbeatBefore: cutoff }),
+      { machineId },
     );
     if (changed) marked.push(machineId);
   }

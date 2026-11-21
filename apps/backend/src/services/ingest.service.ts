@@ -13,6 +13,7 @@ import { transaction, type Models } from '../config/database.js';
 import { logger } from '../config/logger.js';
 import { HttpError } from '../errors/http-error.js';
 import { toMachineCommand } from '../mappers/command.mapper.js';
+import { inBookingTransaction } from './booking-retry.service.js';
 import { handleMachineFailure } from './machine-failure.service.js';
 
 // The command each event confirms. Job commands are matched by their jobId too.
@@ -62,48 +63,53 @@ export async function receiveEvent(
   machineId: string,
   event: MachineEventRequest,
 ): Promise<MachineEventResponse> {
-  return transaction(async (tx) => {
-    if (!(await tx.machines.exists(machineId))) {
-      throw new HttpError(404, `Machine not found: ${machineId}`);
-    }
+  // A failure reroutes orders, which books jobs: retried if a booking clashes at the same moment.
+  return inBookingTransaction(
+    async (tx) => {
+      if (!(await tx.machines.exists(machineId))) {
+        throw new HttpError(404, `Machine not found: ${machineId}`);
+      }
 
-    // 1. Is this the newest event from this machine? If so, lastSeq moves up to its seq.
-    //    A duplicate always counts as not newest (its original already moved lastSeq to at
-    //    least this seq), so this changes nothing for a duplicate.
-    const newest = await tx.machines.advanceSeq(machineId, BigInt(event.seq));
+      // 1. Is this the newest event from this machine? If so, lastSeq moves up to its seq.
+      //    A duplicate always counts as not newest (its original already moved lastSeq to at
+      //    least this seq), so this changes nothing for a duplicate.
+      const newest = await tx.machines.advanceSeq(machineId, BigInt(event.seq));
 
-    // 2. Store it, flagged stale if a newer event came first.
-    const stored = await tx.machineEvents.insertIfNew({
-      machineId,
-      eventId: event.eventId,
-      seq: BigInt(event.seq),
-      type: event.type,
-      payload: event.payload,
-      receivedAt: getClock().now(),
-      stale: !newest,
-    });
-    if (!stored) {
-      // Already processed when it first arrived; doing it again would apply it twice.
-      return { result: 'DUPLICATE' };
-    }
+      // 2. Store it, flagged stale if a newer event came first.
+      const stored = await tx.machineEvents.insertIfNew({
+        machineId,
+        eventId: event.eventId,
+        seq: BigInt(event.seq),
+        type: event.type,
+        payload: event.payload,
+        receivedAt: getClock().now(),
+        stale: !newest,
+      });
+      if (!stored) {
+        // Already processed when it first arrived; doing it again would apply it twice.
+        return { result: 'DUPLICATE' };
+      }
 
-    // 3. The event is a receipt for its command. That stays true whatever order events
-    //    arrive in, so a stale event acknowledges its command too.
-    await acknowledgeConfirmedCommand(tx, machineId, event);
+      // 3. The event is a receipt for its command. That stays true whatever order events
+      //    arrive in, so a stale event acknowledges its command too.
+      await acknowledgeConfirmedCommand(tx, machineId, event);
 
-    // 4. The event is also news about the machine. A stale event's news is out of date, and
-    //    applying it would overwrite newer state (rule 7), so it stops here.
-    if (!newest) {
-      return { result: 'STALE' };
-    }
+      // 4. The event is also news about the machine. A stale event's news is out of date, and
+      //    applying it would overwrite newer state (rule 7), so it stops here.
+      if (!newest) {
+        return { result: 'STALE' };
+      }
 
-    // 5. Apply the event's news. Job events (JOB_STARTED, JOB_COMPLETED) come later.
-    if (event.type === 'MACHINE_FAILURE') {
-      await handleMachineFailure(tx, machineId, { type: 'REPORTED' });
-    }
+      // 5. Apply the event's news. Job events (JOB_STARTED, JOB_COMPLETED) come later.
+      if (event.type === 'MACHINE_FAILURE') {
+        // Marks the machine ERROR and moves its work to other machines.
+        await handleMachineFailure(tx, machineId, { type: 'REPORTED' });
+      }
 
-    return { result: 'STORED' };
-  });
+      return { result: 'STORED' };
+    },
+    { machineId, eventId: event.eventId },
+  );
 }
 
 // Marks the command this event confirms as ACKED; see CONFIRMS.
