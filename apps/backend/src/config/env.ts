@@ -11,6 +11,10 @@ const envSchema = z.object({
   // Real seconds an operator has to approve a proposal. Routing never plans a job to start
   // sooner, so a proposal cannot expire while someone is reading it.
   APPROVAL_WINDOW_SECONDS: z.coerce.number().int().positive().default(120),
+  // Real seconds without a heartbeat before a working machine is marked OFFLINE; converted to
+  // simulated time with the clock scale. Above the simulator's 5-second request timeout, so a
+  // slow backend doesn't mark healthy machines offline.
+  HEARTBEAT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(10),
   // Shared secret that machines (and simulators) send as "Authorization: Bearer <token>" on the
   // heartbeat and event endpoints. The same value goes in each simulator's environment.
   INGEST_TOKEN: z.string().min(16, 'INGEST_TOKEN must be at least 16 characters'),

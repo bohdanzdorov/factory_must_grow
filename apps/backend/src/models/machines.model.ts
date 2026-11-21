@@ -1,5 +1,8 @@
 import type { DbClient } from '../config/prisma.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import type { MachineStatus, Prisma } from '../generated/prisma/client.js';
+
+// Machines that are expected to be sending heartbeats.
+export const WORKING_STATUSES: MachineStatus[] = ['IDLE', 'RUNNING'];
 
 export const machineInclude = {
   capabilities: { orderBy: { capability: 'asc' } },
@@ -46,6 +49,38 @@ export function machinesModel(db: DbClient) {
       const { count } = await db.machine.updateMany({
         where: { id, lastSeq: { lt: seq } },
         data: { lastSeq: seq },
+      });
+      return count === 1;
+    },
+
+    // Ids of working machines (IDLE or RUNNING) last heard from before `cutoff`. A machine
+    // that has never sent a heartbeat (lastHeartbeatAt is null) is not included.
+    async findSilentSince(cutoff: Date): Promise<string[]> {
+      const machines = await db.machine.findMany({
+        where: { status: { in: WORKING_STATUSES }, lastHeartbeatAt: { lt: cutoff } },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+      });
+      return machines.map((machine) => machine.id);
+    },
+
+    // Sets the machine's status to `to`, but only if it is currently one of `from` (and, with
+    // `lastHeartbeatBefore`, only if it is still silent since then). Returns true if it changed.
+    // The condition is checked in the same UPDATE, so a heartbeat or status change that lands
+    // at the same moment is never overwritten.
+    async changeStatus(
+      id: string,
+      change: { from: MachineStatus[]; to: MachineStatus; lastHeartbeatBefore?: Date },
+    ): Promise<boolean> {
+      const { count } = await db.machine.updateMany({
+        where: {
+          id,
+          status: { in: change.from },
+          ...(change.lastHeartbeatBefore === undefined
+            ? {}
+            : { lastHeartbeatAt: { lt: change.lastHeartbeatBefore } }),
+        },
+        data: { status: change.to },
       });
       return count === 1;
     },

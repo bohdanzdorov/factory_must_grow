@@ -179,7 +179,7 @@ Every reply is 200, so the machine moves on to its next event.
 | `JOB_COMPLETED`   | nothing                                |
 
 - Events are stored whatever the machine's status, including `OFFLINE`.
-- What an event does to the machine, its jobs and its orders comes later: failures in W3-04, job lifecycle in W3-10.
+- A new `MACHINE_FAILURE` marks the machine `ERROR` (see "Failure detection"). What job events do to jobs and orders comes later.
 
 ## Simulator
 
@@ -202,6 +202,25 @@ Every reply is 200, so the machine moves on to its next event.
 - **At-least-once delivery:** events wait in an in-memory outbox and are sent one at a time, in order. Each stays at the front until the backend answers 2xx, retrying with backoff (0.5 s, doubling to 5 s, in real time), so a lost response means a real duplicate. Only a 400 drops an event, because sending it again cannot help.
 - A heartbeat that fails is not retried; the next one follows a second later. The machine keeps running while the backend is down.
 - The outbox is in memory, so undelivered events are lost if the process stops. A real controller would persist them; here the backend's missed-heartbeat timeout covers a machine that disappears.
+
+## Failure detection
+
+The backend learns that a machine has failed in one of two ways, and both call the same function, `handleMachineFailure` (`services/machine-failure.service.ts`):
+
+| How                                                                  | Machine becomes | From                         |
+| -------------------------------------------------------------------- | --------------- | ---------------------------- |
+| It says so: a new (not stale, not duplicate) `MACHINE_FAILURE` event | `ERROR`         | `IDLE`, `RUNNING`, `OFFLINE` |
+| It goes silent: no heartbeat for `HEARTBEAT_TIMEOUT_SECONDS` (10 s)  | `OFFLINE`       | `IDLE`, `RUNNING`            |
+
+- Routing already skips `ERROR` and `OFFLINE` machines, so a failed machine gets no new work. Its existing jobs are not moved yet; that is the next step (see "Failure handling").
+- **`OFFLINE` → `ERROR`:** a machine we couldn't hear that comes back saying it is broken is broken.
+- **`ERROR` doesn't become `OFFLINE`** when it goes quiet: it is already unavailable, and recovery stays simple (`ERROR` ends with `MACHINE_RESET`, `OFFLINE` ends when heartbeats return).
+- **A machine that has never sent a heartbeat is not watched.** Seeded machines have no simulator until one is started; marking them all `OFFLINE` would leave routing with nothing, and nothing brings a machine back yet. To revisit once recovery exists.
+- **The timeout is 10 real seconds**, above the simulator's 5-second request timeout, so a slow backend doesn't mark healthy machines offline. It is converted to simulated time with the scale (10 simulated minutes at 60×), because `lastHeartbeatAt` is simulated time.
+- **The check runs in the background every 2 real seconds** (`services/heartbeat-monitor.service.ts`, started in `index.ts`). The first check waits one full timeout after the backend starts: after a restart every machine's last heartbeat looks old, and the simulators need a moment to get through again.
+- **A heartbeat arriving at the same moment wins.** The status change re-checks "still silent since the cutoff?" in the same `UPDATE`, so a machine whose heartbeat just landed is left alone.
+- Each silent machine is handled in its own transaction, so one machine's failure handling can't hold up or undo another's.
+- Background loops (`background/loop.ts`) never overlap: the next run is scheduled only after the previous one finishes, and a failed run is logged and retried on the next tick.
 
 ## Failure handling
 
@@ -234,7 +253,7 @@ The demo runs on a simulated clock that is faster than real time, set by `CLOCK_
 - **The rule: anything stored or compared uses simulated time.** That covers deadlines, planned job times, `createdAt`, `receivedAt` and `lastHeartbeatAt`, plus every comparison: deadlines, dispatching, expiry and heartbeat timeouts.
 - **Real time is used only for** how often background loops run, and for log timestamps.
 - Database columns have no `now()` defaults, so the app always passes `clock.now()`. A forgotten time is a type error, not a silently wrong value.
-- A heartbeat timeout is defined in heartbeats (for example, 3 missed) and converted to simulated time with the scale, so the comparison uses two simulated times.
+- The heartbeat timeout is set in real seconds (`HEARTBEAT_TIMEOUT_SECONDS`, default 10) and converted to simulated time with the scale, so the comparison uses two simulated times.
 - "Deadline must be in the future" is checked in the backend with the clock, not in the shared schema, which only checks the date's format.
 - **A restart moves the clock back** to the current real time, so jobs planned far ahead can end up far in the future. Reseed with `npm run db:seed` after restarting. Saving the clock's start in the database would avoid this, but is left out of v1 to keep it simple.
 - Tests replace the clock with a manual one that only moves when the test moves it.

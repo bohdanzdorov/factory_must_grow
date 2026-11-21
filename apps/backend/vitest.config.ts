@@ -16,6 +16,7 @@ export default defineConfig({
       // Fixed, so tests don't depend on a value in .env.
       APPROVAL_WINDOW_SECONDS: '120',
       INGEST_TOKEN: 'test-ingest-token-0123456789',
+      HEARTBEAT_TIMEOUT_SECONDS: '10',
     },
     globalSetup: ['./test/global-setup.ts'],
     setupFiles: ['./test/setup.ts'],

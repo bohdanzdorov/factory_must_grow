@@ -13,6 +13,7 @@ import { transaction, type Models } from '../config/database.js';
 import { logger } from '../config/logger.js';
 import { HttpError } from '../errors/http-error.js';
 import { toMachineCommand } from '../mappers/command.mapper.js';
+import { handleMachineFailure } from './machine-failure.service.js';
 
 // The command each event confirms. Job commands are matched by their jobId too.
 const CONFIRMS: Record<MachineEventType, CommandType | null> = {
@@ -55,9 +56,8 @@ export async function recordHeartbeat(machineId: string): Promise<HeartbeatRespo
   });
 }
 
-// Stores the event once, acknowledges the command it confirms, and tells whether it is the
-// newest event from the machine so far. What the event means for the machine, its jobs and
-// orders comes in later tasks (W3-04, W3-10), and only for events that are not stale.
+// Stores the event once, acknowledges the command it confirms, and, if it is the newest event
+// from the machine so far, applies what it means: MACHINE_FAILURE marks the machine ERROR.
 export async function receiveEvent(
   machineId: string,
   event: MachineEventRequest,
@@ -97,7 +97,11 @@ export async function receiveEvent(
       return { result: 'STALE' };
     }
 
-    // The event's effects on the machine, its jobs and orders go here (W3-04, W3-10).
+    // 5. Apply the event's news. Job events (JOB_STARTED, JOB_COMPLETED) come later.
+    if (event.type === 'MACHINE_FAILURE') {
+      await handleMachineFailure(tx, machineId, { type: 'REPORTED' });
+    }
+
     return { result: 'STORED' };
   });
 }
