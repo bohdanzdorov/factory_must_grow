@@ -134,6 +134,16 @@ A decision is decided exactly once: `PROPOSED` may become `APPROVED`, `REJECTED`
 - The simulator starts `seq` from `Date.now()`, so events after a restart are not treated as stale.
 - Events for a job that is no longer `RUNNING` are stored but change nothing. `JOB_CANCELLED` usually arrives for a job the backend has already `RELEASED`; it only acknowledges the command and frees the machine.
 
+### Duplicate and stale events (rules 6 and 7)
+
+- **Duplicate:** an event whose `(machineId, eventId)` is already stored. It is a resend whose first attempt got through, so it is not processed again.
+- **Stale:** a new event whose `seq` is lower than or equal to `Machine.lastSeq`, the highest `seq` processed for that machine. A newer event overtook it on the way, so its news is out of date. Equal counts as stale: two different events should never share a `seq`, and if they do, the second must not win.
+- **Every event is two things: a receipt and news.** The receipt says "I received this command". The news says "this happened to the machine". A stale event's receipt is still true, so it acknowledges its command; its news is out of date, so it changes no state. Without the receipt, a command whose only confirmation arrived late would stay open and be resent forever, and the simulator, which skips commands it has already seen, would never confirm it again.
+- **Stale events are stored, flagged `stale`**, not rejected. They stay visible in the event log, and a resend of one is caught as a duplicate. A 4xx would be wrong: a 400 says the event is invalid when it is only late, and any other error makes the machine retry it forever.
+- **The newest-or-stale check is one conditional update:** `UPDATE machine SET last_seq = seq WHERE id = … AND last_seq < seq`. One changed row means newest. Reading `lastSeq` and comparing in code would let two events processed at the same moment both count as newest. When it changes the row, the row stays locked until the transaction ends, so a machine's events are processed one after another, which the event effects in W3-04 and W3-10 rely on.
+- With the current simulator a stale event is rare: its outbox sends one event at a time, in order. It happens with two processes for one machine, a network that reorders requests (the W4-05 drop/delay flag), or a real controller.
+- **Known limit:** `seq` comes from the simulator's real clock at startup. If that clock is set back and the simulator restarts, its events look stale until real time passes the old `lastSeq`. Reseeding resets `lastSeq` to 0.
+
 ## Ingest API
 
 The two endpoints machines use. The request and response shapes are in `packages/shared/src/ingest.ts`.
@@ -153,9 +163,12 @@ The two endpoints machines use. The request and response shapes are in `packages
 
 **`POST /api/machines/:id/events`**, in one transaction:
 
-1. Store the event with `receivedAt` set to the simulated time (404 if there is no such machine, 400 if the body is invalid).
-2. If an event with the same `(machineId, eventId)` is already stored, reply `{ result: 'DUPLICATE' }` and stop. It is a resend whose first attempt got through; processing it again would apply it twice. Stored with `ON CONFLICT DO NOTHING` rather than by catching the unique-constraint error, because an error inside a Postgres transaction aborts the whole transaction.
-3. Acknowledge the command the event confirms, and reply `{ result: 'STORED' }`:
+1. Move `Machine.lastSeq` up to the event's `seq` if it is the newest event from the machine so far; otherwise the event is stale (404 if there is no such machine, 400 if the body is invalid).
+2. Store the event with `receivedAt` set to the simulated time, flagged `stale` if it is. If an event with the same `(machineId, eventId)` is already stored, reply `{ result: 'DUPLICATE' }` and stop. Stored with `ON CONFLICT DO NOTHING` rather than by catching the unique-constraint error, because an error inside a Postgres transaction aborts the whole transaction. A duplicate never moves `lastSeq` in step 1, because its original already moved it to at least the same `seq`.
+3. Acknowledge the command the event confirms (table below), stale or not.
+4. A stale event stops here with `{ result: 'STALE' }`. Otherwise the event's effects are applied (from W3-04 and W3-10) and the reply is `{ result: 'STORED' }`.
+
+Every reply is 200, so the machine moves on to its next event.
 
 | Event             | Acknowledges                           |
 | ----------------- | -------------------------------------- |
@@ -166,7 +179,7 @@ The two endpoints machines use. The request and response shapes are in `packages
 | `JOB_COMPLETED`   | nothing                                |
 
 - Events are stored whatever the machine's status, including `OFFLINE`.
-- What an event does to the machine, its jobs and its orders comes later: the stale-`seq` check in W3-03, failures in W3-04, job lifecycle in W3-10.
+- What an event does to the machine, its jobs and its orders comes later: failures in W3-04, job lifecycle in W3-10.
 
 ## Simulator
 

@@ -438,3 +438,156 @@ describe('request logging', () => {
     expect(level('GET', '/api/machines', 200)).toBe('info');
   });
 });
+
+describe('stale events (rule 7)', () => {
+  function lastSeq(machineId: string) {
+    return prisma.machine
+      .findUniqueOrThrow({ where: { id: machineId } })
+      .then((machine) => machine.lastSeq);
+  }
+
+  function storedEvent(eventId: string) {
+    return prisma.machineEvent.findFirstOrThrow({ where: { eventId } });
+  }
+
+  function result(res: { body: unknown }) {
+    return MachineEventResponseSchema.parse(res.body).result;
+  }
+
+  it("moves the machine's lastSeq up to the first event's seq", async () => {
+    const machine = await createMachine();
+
+    const res = await sendEvent(machine.id, { seq: 100 });
+
+    expect(result(res)).toBe('STORED');
+    expect(await lastSeq(machine.id)).toBe(100n);
+  });
+
+  it('treats a higher seq as newest and moves lastSeq up again', async () => {
+    const machine = await createMachine({ lastSeq: 100n });
+
+    const res = await sendEvent(machine.id, { seq: 101 });
+
+    expect(result(res)).toBe('STORED');
+    expect(await lastSeq(machine.id)).toBe(101n);
+  });
+
+  it('answers STALE for a lower seq, stores it flagged, and leaves lastSeq alone', async () => {
+    const machine = await createMachine({ lastSeq: 101n });
+    const eventId = randomUUID();
+
+    const res = await sendEvent(machine.id, { eventId, seq: 100 });
+
+    expect(res.status).toBe(200);
+    expect(result(res)).toBe('STALE');
+    expect(await storedEvent(eventId)).toMatchObject({ seq: 100n, stale: true });
+    expect(await lastSeq(machine.id)).toBe(101n);
+  });
+
+  it('stores a fresh event unflagged', async () => {
+    const machine = await createMachine();
+    const eventId = randomUUID();
+
+    await sendEvent(machine.id, { eventId, seq: 1 });
+
+    expect(await storedEvent(eventId)).toMatchObject({ stale: false });
+  });
+
+  it('treats an equal seq from a different event as stale', async () => {
+    const machine = await createMachine();
+    await sendEvent(machine.id, { seq: 100 });
+
+    const res = await sendEvent(machine.id, { seq: 100 });
+
+    expect(result(res)).toBe('STALE');
+  });
+
+  it('answers DUPLICATE, not STALE, for a resend of the newest event', async () => {
+    const machine = await createMachine();
+    const eventId = randomUUID();
+    await sendEvent(machine.id, { eventId, seq: 100 });
+
+    const res = await sendEvent(machine.id, { eventId, seq: 100 });
+
+    expect(result(res)).toBe('DUPLICATE');
+    expect(await storedEvent(eventId)).toMatchObject({ stale: false });
+  });
+
+  it('answers DUPLICATE for a resend of a stale event', async () => {
+    const machine = await createMachine({ lastSeq: 200n });
+    const eventId = randomUUID();
+    await sendEvent(machine.id, { eventId, seq: 100 });
+
+    const res = await sendEvent(machine.id, { eventId, seq: 100 });
+
+    expect(result(res)).toBe('DUPLICATE');
+    expect(await prisma.machineEvent.count({ where: { eventId } })).toBe(1);
+  });
+
+  it('a stale event still acknowledges the command it confirms', async () => {
+    // JOB_COMPLETED (seq 101) overtook JOB_STARTED (seq 100) on the way. JOB_STARTED is
+    // stale, but it is the only receipt for the START_JOB.
+    const machine = await createMachine();
+    const start = await createCommand({
+      machineId: machine.id,
+      type: 'START_JOB',
+      payload: {
+        jobId: 'job-7',
+        plannedStart: '2026-11-19T09:00:00.000Z',
+        plannedEnd: '2026-11-19T10:00:00.000Z',
+      },
+      status: 'DELIVERED',
+    });
+    await sendEvent(machine.id, { seq: 101, type: 'JOB_COMPLETED', payload: { jobId: 'job-7' } });
+
+    const res = await sendEvent(machine.id, {
+      seq: 100,
+      type: 'JOB_STARTED',
+      payload: { jobId: 'job-7' },
+    });
+
+    expect(result(res)).toBe('STALE');
+    expect(await commandStatus(start.id)).toBe('ACKED');
+  });
+
+  it("keeps each machine's seq separate", async () => {
+    const machineA = await createMachine();
+    const machineB = await createMachine();
+    await sendEvent(machineA.id, { seq: 1000 });
+
+    const res = await sendEvent(machineB.id, { seq: 1 });
+
+    expect(result(res)).toBe('STORED');
+    expect(await lastSeq(machineB.id)).toBe(1n);
+  });
+
+  it("doesn't let heartbeats move lastSeq", async () => {
+    const machine = await createMachine({ lastSeq: 100n });
+
+    await heartbeat(machine.id);
+
+    expect(await lastSeq(machine.id)).toBe(100n);
+  });
+
+  it('stays consistent when many events for one machine arrive at the same moment', async () => {
+    const machine = await createMachine();
+    // Out of order on purpose; all sent at once.
+    const seqs = [5, 3, 9, 1, 7, 2, 8, 4, 6, 10];
+
+    const responses = await Promise.all(seqs.map((seq) => sendEvent(machine.id, { seq })));
+
+    expect(responses.map((res) => res.status)).toEqual(seqs.map(() => 200));
+    // lastSeq ends at the highest seq, whatever order they were processed in.
+    expect(await lastSeq(machine.id)).toBe(10n);
+    // Every event is stored exactly once, and the highest one is never stale.
+    const events = await prisma.machineEvent.findMany({ where: { machineId: machine.id } });
+    expect(events).toHaveLength(seqs.length);
+    expect(events.find((event) => event.seq === 10n)?.stale).toBe(false);
+    // Each response matches the stored flag.
+    const flags = new Map(events.map((event) => [event.seq, event.stale]));
+    responses.forEach((res, i) => {
+      const stale = flags.get(BigInt(seqs[i] ?? 0));
+      expect(result(res)).toBe(stale ? 'STALE' : 'STORED');
+    });
+  });
+});

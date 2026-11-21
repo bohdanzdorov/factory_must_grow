@@ -9,7 +9,7 @@ import type {
   MachineEventType,
 } from '@factorymustgrow/shared';
 import { getClock } from '../config/clock.js';
-import { transaction } from '../config/database.js';
+import { transaction, type Models } from '../config/database.js';
 import { logger } from '../config/logger.js';
 import { HttpError } from '../errors/http-error.js';
 import { toMachineCommand } from '../mappers/command.mapper.js';
@@ -55,8 +55,9 @@ export async function recordHeartbeat(machineId: string): Promise<HeartbeatRespo
   });
 }
 
-// Stores the event once and acknowledges the command it confirms. What the event means for
-// the machine, its jobs and orders comes in later tasks (W3-04, W3-10).
+// Stores the event once, acknowledges the command it confirms, and tells whether it is the
+// newest event from the machine so far. What the event means for the machine, its jobs and
+// orders comes in later tasks (W3-04, W3-10), and only for events that are not stale.
 export async function receiveEvent(
   machineId: string,
   event: MachineEventRequest,
@@ -66,6 +67,12 @@ export async function receiveEvent(
       throw new HttpError(404, `Machine not found: ${machineId}`);
     }
 
+    // 1. Is this the newest event from this machine? If so, lastSeq moves up to its seq.
+    //    A duplicate always counts as not newest (its original already moved lastSeq to at
+    //    least this seq), so this changes nothing for a duplicate.
+    const newest = await tx.machines.advanceSeq(machineId, BigInt(event.seq));
+
+    // 2. Store it, flagged stale if a newer event came first.
     const stored = await tx.machineEvents.insertIfNew({
       machineId,
       eventId: event.eventId,
@@ -73,23 +80,49 @@ export async function receiveEvent(
       type: event.type,
       payload: event.payload,
       receivedAt: getClock().now(),
+      stale: !newest,
     });
     if (!stored) {
       // Already processed when it first arrived; doing it again would apply it twice.
       return { result: 'DUPLICATE' };
     }
 
-    const commandType = CONFIRMS[event.type];
-    if (commandType) {
-      const { jobId } = event.payload;
-      if (!JOB_COMMANDS.includes(commandType)) {
-        await tx.commands.acknowledge({ machineId, type: commandType });
-      } else if (jobId !== undefined) {
-        await tx.commands.acknowledge({ machineId, type: commandType, jobId });
-      }
-      // A job event without a jobId confirms nothing, rather than every job command.
+    // 3. The event is a receipt for its command. That stays true whatever order events
+    //    arrive in, so a stale event acknowledges its command too.
+    await acknowledgeConfirmedCommand(tx, machineId, event);
+
+    // 4. The event is also news about the machine. A stale event's news is out of date, and
+    //    applying it would overwrite newer state (rule 7), so it stops here.
+    if (!newest) {
+      return { result: 'STALE' };
     }
 
+    // The event's effects on the machine, its jobs and orders go here (W3-04, W3-10).
     return { result: 'STORED' };
   });
+}
+
+// Marks the command this event confirms as ACKED; see CONFIRMS.
+async function acknowledgeConfirmedCommand(
+  tx: Models,
+  machineId: string,
+  event: MachineEventRequest,
+): Promise<void> {
+  const type = CONFIRMS[event.type];
+
+  // JOB_COMPLETED: no command asks a job to finish.
+  if (type === null) return;
+
+  // FAIL and RESET are about the whole machine: every open one is confirmed.
+  if (!JOB_COMMANDS.includes(type)) {
+    await tx.commands.acknowledge({ machineId, type });
+    return;
+  }
+
+  // START_JOB and CANCEL_JOB are about one job: only the one for this job is confirmed.
+  // A job event that doesn't say which job confirms nothing, rather than every job command.
+  const { jobId } = event.payload;
+  if (jobId === undefined) return;
+
+  await tx.commands.acknowledge({ machineId, type, jobId });
 }

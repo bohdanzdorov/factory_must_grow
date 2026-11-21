@@ -8,6 +8,8 @@ export interface NewMachineEvent {
   type: MachineEventType;
   payload: Prisma.InputJsonValue;
   receivedAt: Date;
+  // A newer event from the same machine was processed first; see Machine.lastSeq.
+  stale: boolean;
 }
 
 export function machineEventsModel(db: DbClient) {

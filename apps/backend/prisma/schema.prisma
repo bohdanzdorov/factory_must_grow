@@ -244,6 +244,9 @@ model MachineEvent {
   type       MachineEventType
   payload    Json
   receivedAt DateTime         @map("received_at") @db.Timestamptz(3)
+  // Arrived after a newer event (higher seq) from the same machine: stored for the record,
+  // but it changed nothing (rule 7).
+  stale      Boolean          @default(false)
 
   machine Machine @relation(fields: [machineId], references: [id])
 

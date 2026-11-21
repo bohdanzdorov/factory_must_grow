@@ -33,5 +33,21 @@ export function machinesModel(db: DbClient) {
       });
       return count === 1;
     },
+
+    // Moves the machine's lastSeq up to `seq` if `seq` is higher than every event seq
+    // processed so far. Returns true if it moved (the event is the newest yet), false if an
+    // event with an equal or higher seq was already processed (the event is stale).
+    //
+    // One conditional UPDATE, not a read and then a write: the database compares and writes in
+    // one step, so two events processed at the same moment can't both count as newest. When it
+    // moves, the machine row stays locked until the transaction ends, so a machine's events are
+    // processed one after another.
+    async advanceSeq(id: string, seq: bigint): Promise<boolean> {
+      const { count } = await db.machine.updateMany({
+        where: { id, lastSeq: { lt: seq } },
+        data: { lastSeq: seq },
+      });
+      return count === 1;
+    },
   };
 }

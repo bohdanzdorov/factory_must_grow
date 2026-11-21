@@ -74,9 +74,13 @@ export const MachineEventRequestSchema = z.object({
 });
 export type MachineEventRequest = z.infer<typeof MachineEventRequestSchema>;
 
-// Response of POST /api/machines/:id/events. DUPLICATE: the backend already had this event
-// (the first attempt got through, only its response was lost), so the machine can move on.
+// Response of POST /api/machines/:id/events, always 200 so the machine moves on:
+// - STORED: processed normally.
+// - DUPLICATE: the backend already had this event (the first attempt got through, only its
+//   response was lost); nothing happened this time.
+// - STALE: a newer event from this machine was processed first. Stored and its command
+//   acknowledged, but it changed nothing else, so it can't overwrite newer state.
 export const MachineEventResponseSchema = z.object({
-  result: z.enum(['STORED', 'DUPLICATE']),
+  result: z.enum(['STORED', 'DUPLICATE', 'STALE']),
 });
 export type MachineEventResponse = z.infer<typeof MachineEventResponseSchema>;
