@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/config/prisma.js';
 import type { ManualClock } from '../src/domain/clock.js';
-import { markSilentMachinesOffline } from '../src/services/heartbeat-monitor.service.js';
+import { markSilentMachinesOffline } from '../src/background/heartbeat-monitor.js';
 import { api } from './helpers/api.js';
 import { useManualClock } from './helpers/clock.js';
 import {

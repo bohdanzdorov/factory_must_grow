@@ -9,12 +9,11 @@ import type {
   MachineEventType,
 } from '@factorymustgrow/shared';
 import { getClock } from '../config/clock.js';
-import { transaction, type Models } from '../config/database.js';
+import { inBookingTransaction, transaction, type Models } from '../config/database.js';
 import { logger } from '../config/logger.js';
 import { HttpError } from '../errors/http-error.js';
 import { toMachineCommand } from '../mappers/command.mapper.js';
-import { inBookingTransaction } from './booking-retry.service.js';
-import { handleMachineFailure } from './machine-failure.service.js';
+import { handleMachineFailure } from '../operations/machine-failure.js';
 
 // The command each event confirms. Job commands are matched by their jobId too.
 const CONFIRMS: Record<MachineEventType, CommandType | null> = {

@@ -2,6 +2,21 @@
 
 Decisions made while designing the domain schema (W1-04). They refine or override the project plan, and they feed into `DESIGN.md` (W4-06). Test cases for these rules are in [test-scenarios.md](test-scenarios.md).
 
+## Backend structure
+
+Every request follows one path: **router → controller → service → models.**
+
+| Folder         | Holds                                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------------------------- |
+| `routers/`     | One per controller: which URL calls which controller function                                           |
+| `controllers/` | One per service: reads the request, validates it, calls the service                                     |
+| `services/`    | One per controller, only the logic for its endpoints. **A service never calls another service.**        |
+| `operations/`  | Business steps shared by several services or background jobs (`propose-route.ts`, `machine-failure.ts`) |
+| `background/`  | Work that runs on a timer, not from a request (`heartbeat-monitor.ts`, and the `loop.ts` that runs it)  |
+| `models/`      | One per database table. A service may use several, because one action can touch several tables          |
+| `domain/`      | Pure logic with no database (routing, status rules, clock)                                              |
+| `config/`      | Environment, logging, the database client, `transaction()` and `inBookingTransaction()`                 |
+
 ## Schema
 
 - Cycle times live in `MachineCapability`, with one row per machine and capability.
@@ -61,7 +76,7 @@ Implemented as a pure function, `routeOrder` in `apps/backend/src/domain/routing
 
 ### Routing an order through the API
 
-`POST /api/orders/:id/route` (in `services/routing.service.ts`) does everything in **one transaction**: lock the order, load the data, run `routeOrder`, save the decision with all candidates, book the job, and update the order. Either all of it is saved or none of it.
+`POST /api/orders/:id/route` (in `services/routing.service.ts`, using `operations/propose-route.ts`) does everything in **one transaction**: lock the order, load the data, run `routeOrder`, save the decision with all candidates, book the job, and update the order. Either all of it is saved or none of it.
 
 - **Only `DRAFT` and `BLOCKED` orders can be routed.** Any other status returns 409.
 - **The order's row is locked** (`SELECT ... FOR UPDATE`) for the whole transaction, so two route requests for the same order run one after the other, and the second gets 409.
@@ -205,7 +220,7 @@ Every reply is 200, so the machine moves on to its next event.
 
 ## Failure detection
 
-The backend learns that a machine has failed in one of two ways, and both call the same function, `handleMachineFailure` (`services/machine-failure.service.ts`):
+The backend learns that a machine has failed in one of two ways, and both call the same function, `handleMachineFailure` (`operations/machine-failure.ts`):
 
 | How                                                                  | Machine becomes | From                         |
 | -------------------------------------------------------------------- | --------------- | ---------------------------- |
@@ -217,14 +232,14 @@ The backend learns that a machine has failed in one of two ways, and both call t
 - **`ERROR` doesn't become `OFFLINE`** when it goes quiet: it is already unavailable, and recovery stays simple (`ERROR` ends with `MACHINE_RESET`, `OFFLINE` ends when heartbeats return).
 - **A machine that has never sent a heartbeat is not watched.** Seeded machines have no simulator until one is started; marking them all `OFFLINE` would leave routing with nothing, and nothing brings a machine back yet. To revisit once recovery exists.
 - **The timeout is 10 real seconds**, above the simulator's 5-second request timeout, so a slow backend doesn't mark healthy machines offline. It is converted to simulated time with the scale (10 simulated minutes at 60×), because `lastHeartbeatAt` is simulated time.
-- **The check runs in the background every 2 real seconds** (`services/heartbeat-monitor.service.ts`, started in `index.ts`). The first check waits one full timeout after the backend starts: after a restart every machine's last heartbeat looks old, and the simulators need a moment to get through again.
+- **The check runs in the background every 2 real seconds** (`background/heartbeat-monitor.ts`, started in `index.ts`). The first check waits one full timeout after the backend starts: after a restart every machine's last heartbeat looks old, and the simulators need a moment to get through again.
 - **A heartbeat arriving at the same moment wins.** The status change re-checks "still silent since the cutoff?" in the same `UPDATE`, so a machine whose heartbeat just landed is left alone.
 - Each silent machine is handled in its own transaction, so one machine's failure handling can't hold up or undo another's.
 - Background loops (`background/loop.ts`) never overlap: the next run is scheduled only after the previous one finishes, and a failed run is logged and retried on the next tick.
 
 ## Failure handling
 
-Once a machine is marked failed, its work moves elsewhere in the same transaction (`handleMachineFailure` in `services/machine-failure.service.ts`). For a failure event, that transaction also stores the event, so a duplicate stops before any of this.
+Once a machine is marked failed, its work moves elsewhere in the same transaction (`handleMachineFailure` in `operations/machine-failure.ts`). For a failure event, that transaction also stores the event, so a duplicate stops before any of this.
 
 1. **Status:** the machine becomes `ERROR` or `OFFLINE` (see "Failure detection"). If it was already failed, stop: this is what makes running it twice safe.
 2. **Lock the affected orders** (those with jobs on the machine), always in id order, so an approval or rejection at the same moment waits instead of clashing, and two failures can't deadlock. Then read the jobs again, in case one of those just changed them.
@@ -239,7 +254,7 @@ Once a machine is marked failed, its work moves elsewhere in the same transactio
 5. **Reroute each affected order, most urgent deadline first**, so it gets the first free slot. Routing skips the failed machine on its own. The new decision is `kind: REROUTE` with `supersedesId` pointing at the decision it replaces, and its explanation starts with the reason ("Machine HAM-1 failed (ERROR)."). A machine is found: the job is booked and the order becomes `REROUTE_PENDING`, waiting for approval (rule 8). None fits: the decision is `NO_ELIGIBLE_MACHINE` and the order becomes `BLOCKED` with that explanation as its reason. The released job is kept either way, so nothing is lost.
 
 - **An `OFFLINE` machine may still be running** (it only lost its network). For each released job it may have started (the job was `RUNNING`, or its `START_JOB` was handed out), a `CANCEL_JOB` is queued straight away and goes out with the machine's first heartbeat when it reconnects. The simulator confirms a `CANCEL_JOB` even for a job it isn't running, so sending one is always safe. A machine in `ERROR` has already dropped its job.
-- **If a reroute booking clashes** with another request booking at the same moment, the whole transaction rolls back and runs again, up to 5 attempts, like routing (`services/booking-retry.service.ts`). A failure event then answers 409 and the machine resends it; the monitor tries again on its next check.
+- **If a reroute booking clashes** with another request booking at the same moment, the whole transaction rolls back and runs again, up to 5 attempts, like routing (`inBookingTransaction` in `config/database.ts`). A failure event then answers 409 and the machine resends it; the monitor tries again on its next check.
 - **Routing never books on a machine that just failed.** Routing reads the machines without a lock, so the chosen one may have failed since. Just before booking, it locks the chosen machine's row and reads its status again; if it is now `ERROR` or `OFFLINE`, nothing is saved and routing runs again. The lock also makes a failure in progress on that machine finish first, so a job can't land on it after the failure has collected its jobs.
 - The transaction may run for up to 10 seconds (`config/database.ts`), plenty for ten machines.
 - A machine that failed midway restarts the full quantity elsewhere. Partial progress is not modeled in v1.

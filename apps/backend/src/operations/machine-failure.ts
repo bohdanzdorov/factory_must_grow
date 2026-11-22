@@ -7,7 +7,7 @@ import { logger } from '../config/logger.js';
 import { canChangeOrderStatus } from '../domain/order-status.js';
 import type { MachineStatus, OrderStatus } from '../generated/prisma/client.js';
 import { WORKING_STATUSES } from '../models/machines.model.js';
-import { proposeRoute } from './routing.service.js';
+import { proposeRoute } from './propose-route.js';
 
 export type FailureReason =
   // The machine reported MACHINE_FAILURE: it becomes ERROR.
@@ -21,7 +21,7 @@ export type FailureReason =
 // already failed, or a heartbeat arrived just in time). Safe to call twice: the second call
 // finds the machine already failed and does nothing.
 //
-// Books jobs, so run it inside inBookingTransaction.
+// Books jobs, so run it inside inBookingTransaction (config/database.ts).
 export async function handleMachineFailure(
   tx: Models,
   machineId: string,

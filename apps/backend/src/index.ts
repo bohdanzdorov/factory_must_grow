@@ -6,7 +6,7 @@ import { prisma } from './config/prisma.js';
 import {
   HEARTBEAT_CHECK_INTERVAL_MS,
   markSilentMachinesOffline,
-} from './services/heartbeat-monitor.service.js';
+} from './background/heartbeat-monitor.js';
 
 const server = createApp().listen(env.PORT, (err) => {
   if (err) {
