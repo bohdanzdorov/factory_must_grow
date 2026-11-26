@@ -109,7 +109,7 @@ Implemented as a pure function, `routeOrder` in `apps/backend/src/domain/routing
 | Approve too late | `PROPOSED` → `EXPIRED`                              | `PLANNED` → `CANCELLED` | → `DRAFT`                                  |
 
 - **Rejecting requires a reason** (1–500 characters), saved as `rejectionNote` on the decision. It is the operator's own words, separate from the machine-level rejection reasons on candidates.
-- **Approving after the job's planned start has passed** expires the proposal on the spot and returns 409. The expiry is saved even though the request fails: the transaction returns an "expired" result, and the 409 is raised only after it commits. The background sweep (W3-09) does the same for proposals nobody touches.
+- **Approving after the job's planned start has passed** expires the proposal on the spot and returns 409. The expiry is saved even though the request fails: the transaction returns an "expired" result, and the 409 is raised only after it commits. The dispatcher does the same for proposals nobody touches (see "Dispatcher").
 - **Approval rechecks what it confirms.** It returns 409, and changes nothing, if the proposal has no booked (`PLANNED`) job, if the booked machine is now `ERROR` or `OFFLINE`, or if its site is `DOWN` (rule 3). The operator then rejects the proposal and routes the order again. A `RUNNING` machine is fine: it is only busy with other work.
 - **Routing fails loudly** if it ever chose a machine without a time slot, instead of saving a proposal that books nothing.
 - **Repeating the same action is harmless:** approving an approved decision, or rejecting a rejected one, returns 200 with the current state. The first rejection reason is kept. A conflicting action, such as approving a rejected decision, returns 409.
@@ -139,8 +139,28 @@ A decision is decided exactly once: `PROPOSED` may become `APPROVED`, `REJECTED`
 - A machine confirms a command even when it is already where the command wants it: `CANCEL_JOB` for a job it isn't running (it finished while the machine was offline, say), `RESET` while `IDLE`, `FAIL` while not `RUNNING`. Otherwise the command would never be acknowledged and would be resent forever.
 - The exception is `START_JOB` on a busy machine: it waits, unconfirmed, until the machine is `IDLE`.
 - When a machine fails, its open `START_JOB` commands become `CANCELLED`; other commands stay (see "Failure handling").
-- The dispatcher waits until a machine is `IDLE` before starting its next job.
+- The dispatcher waits until a machine is `IDLE` before starting its next job (see "Dispatcher").
 - `MACHINE_RESET` is what brings an `ERROR` machine back (see "Recovery"), so recovery from a breakdown comes from an event that is safe to process twice, not from a heartbeat that happens to say `IDLE`.
+
+## Dispatcher
+
+A background loop (`background/dispatcher.ts`) runs every real second and turns approved plans into work. Each run does two things, in this order, in one transaction per proposal or per machine, so one item's trouble can't undo or hold up another's.
+
+1. **Expire proposals nobody approved in time.** A `PROPOSED` decision whose job's `plannedStart` has come becomes `EXPIRED`, exactly as if Approve had been clicked too late (`operations/expire-proposal.ts`, shared by both). Expiry runs first, so an overdue proposal is never mistaken for work to start.
+2. **Start due jobs.** For each machine, take its earliest job that is `PLANNED`, has an `APPROVED` decision and a `plannedStart` that has come, and queue a `START_JOB` with its `jobId`, `plannedStart` and `plannedEnd`. The next heartbeat carries the command to the machine. The job stays `PLANNED`: only `JOB_STARTED` proves the machine started it.
+
+A `START_JOB` is queued only if:
+
+| Check                                       | Why                                                                                                                           |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| The machine is `IDLE` and its site is `UP`  | A busy machine waits until it is free; a broken one gets no work                                                              |
+| The machine has no open `START_JOB`         | It still shows `IDLE` until its `JOB_STARTED` arrives, so without this the next run would queue a second job beside the first |
+| This job has never had a `START_JOB` queued | The same job is never started twice, even after its command was confirmed                                                     |
+
+- **Approve and expiry at the same moment:** both lock the order, so one waits for the other, and whichever goes first wins. The second finds the decision no longer `PROPOSED`.
+- **A failure at the same moment:** the dispatcher locks the machine's row and reads its status again before queuing. A failure in progress holds that row, so the dispatcher waits and then sees `ERROR` or `OFFLINE`. A failure that comes after waits for the dispatcher instead, and then cancels the `START_JOB` it queued. Either way, no `START_JOB` is left open on a failed machine.
+- **A job whose `plannedStart` passed long ago** (the backend was down, or the previous job ran long) is started late anyway, with a warning in the log when it is more than 5 real seconds late. Nothing is lost; its deadline may suffer, and the operator sees it.
+- A machine runs a job for its planned duration from when the command arrives, so a late start ends late. Later jobs on that machine wait for it to be `IDLE` rather than overlap.
 
 ## Events
 

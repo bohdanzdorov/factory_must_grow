@@ -2,7 +2,7 @@
 
 Situations the system must handle, and the test that proves each one. The rules behind them are in [design-decisions.md](design-decisions.md). Test files are in `apps/backend/test/` unless they start with `simulator/`. A row marked **not covered** has no test yet; one marked with a task is for a feature that isn't built yet.
 
-Many failure tests also check the whole database with `helpers/consistency.ts`, not just the responses: no overlapping jobs, no active job on a failed machine, one proposal per waiting order, every reroute linked to its own order, and so on.
+Many failure tests also check the whole database with `helpers/consistency.ts`, not just the responses: no overlapping jobs, no active job or open `START_JOB` on a failed machine, one proposal per waiting order, every reroute linked to its own order, and so on.
 
 ## Routing
 
@@ -23,9 +23,9 @@ Many failure tests also check the whole database with `helpers/consistency.ts`, 
 | Double-click approve                    | The second click changes nothing      | `decisions.test.ts`                             |
 | Reject, then route again                | The rejected machine is excluded      | `decisions.test.ts`, `routing-endpoint.test.ts` |
 | Reject, with no other machine available | `BLOCKED`, with a reason              | **not covered**                                 |
-| Not approved by `plannedStart`          | `EXPIRED`, job `CANCELLED`, slot free | `decisions.test.ts`                             |
-| Approve at the moment it expires        | Exactly one outcome wins              | **not covered** (W3-09)                         |
-| `plannedStart` arrives before approval  | The dispatcher does not start the job | W3-09                                           |
+| Not approved by `plannedStart`          | `EXPIRED`, job `CANCELLED`, slot free | `decisions.test.ts`, `dispatcher.test.ts`       |
+| Approve at the moment it expires        | Exactly one outcome wins              | `dispatcher.test.ts`                            |
+| `plannedStart` arrives before approval  | The dispatcher does not start the job | `dispatcher.test.ts`                            |
 
 ## Events
 
@@ -38,11 +38,14 @@ Many failure tests also check the whole database with `helpers/consistency.ts`, 
 
 ## Commands
 
-| Scenario                                  | Expected result                      | Covered by                                           |
-| ----------------------------------------- | ------------------------------------ | ---------------------------------------------------- |
-| Heartbeat response lost                   | Command resent, job started once     | `ingest.test.ts`, `simulator/simulator.test.ts`      |
-| Machine fails with a command pending      | Command `CANCELLED`, never delivered | `reroute.test.ts`, `ingest.test.ts`                  |
-| Machine still busy at next `plannedStart` | Start waits until it is `IDLE`       | `simulator/domain/machine.test.ts`; dispatcher W3-09 |
+| Scenario                                  | Expected result                      | Covered by                                               |
+| ----------------------------------------- | ------------------------------------ | -------------------------------------------------------- |
+| Heartbeat response lost                   | Command resent, job started once     | `ingest.test.ts`, `simulator/simulator.test.ts`          |
+| Machine fails with a command pending      | Command `CANCELLED`, never delivered | `reroute.test.ts`, `ingest.test.ts`                      |
+| Machine still busy at next `plannedStart` | Start waits until it is `IDLE`       | `dispatcher.test.ts`, `simulator/domain/machine.test.ts` |
+| Approved job's `plannedStart` arrives     | Exactly one `START_JOB`, sent once   | `dispatcher.test.ts`                                     |
+| Machine fails while a job is dispatched   | No `START_JOB` left open on it       | `dispatcher.test.ts`                                     |
+| `plannedStart` passed while backend down  | Started late, with a warning         | `dispatcher.test.ts`                                     |
 
 ## Failure
 

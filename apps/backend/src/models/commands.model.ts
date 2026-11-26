@@ -58,6 +58,27 @@ export function commandsModel(db: DbClient) {
       return count > 0;
     },
 
+    // Whether a START_JOB for this job was ever queued and not cancelled (PENDING, DELIVERED
+    // or ACKED), so the dispatcher never starts the same job twice.
+    async wasStartQueued(jobId: string): Promise<boolean> {
+      const count = await db.command.count({
+        where: {
+          type: 'START_JOB',
+          status: { in: ['PENDING', 'DELIVERED', 'ACKED'] },
+          payload: { path: ['jobId'], equals: jobId },
+        },
+      });
+      return count > 0;
+    },
+
+    // Whether the machine has an open (PENDING or DELIVERED) command of this type.
+    async hasOpen(machineId: string, type: CommandType): Promise<boolean> {
+      const count = await db.command.count({
+        where: { machineId, type, status: { in: OPEN_COMMAND_STATUSES } },
+      });
+      return count > 0;
+    },
+
     // Marks the machine's open commands of this type ACKED; returns how many changed.
     // With `jobId`, only commands whose payload names that job. Conditional on the status,
     // so acknowledging twice changes nothing the second time.

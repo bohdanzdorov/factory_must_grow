@@ -81,6 +81,20 @@ export function routingDecisionsModel(db: DbClient) {
       return count === 1;
     },
 
+    // Ids of PROPOSED decisions whose booked job should have started by `now`, so they can
+    // no longer be approved.
+    async findOverdueProposalIds(now: Date): Promise<string[]> {
+      const rows = await db.routingDecision.findMany({
+        where: {
+          status: 'PROPOSED',
+          jobs: { some: { status: 'PLANNED', plannedStart: { lte: now } } },
+        },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+      });
+      return rows.map((row) => row.id);
+    },
+
     // Machines the operator rejected for this order, so routing doesn't propose them again.
     async findRejectedMachineIds(orderId: string): Promise<string[]> {
       const rows = await db.routingDecision.findMany({

@@ -50,6 +50,20 @@ export function jobsModel(db: DbClient) {
       });
     },
 
+    // Approved jobs whose planned start has come by `now` and that haven't started: PLANNED,
+    // on an APPROVED decision. Optionally only one machine's. Oldest planned start first.
+    findDueToStart(now: Date, machineId?: string): Promise<Job[]> {
+      return db.job.findMany({
+        where: {
+          status: 'PLANNED',
+          plannedStart: { lte: now },
+          routingDecision: { status: 'APPROVED' },
+          ...(machineId === undefined ? {} : { machineId }),
+        },
+        orderBy: [{ plannedStart: 'asc' }, { id: 'asc' }],
+      });
+    },
+
     // Moves the job to `to` if it is still active (PLANNED or RUNNING); returns whether it did.
     async changeStatusIfActive(id: string, to: JobStatus): Promise<boolean> {
       const { count } = await db.job.updateMany({

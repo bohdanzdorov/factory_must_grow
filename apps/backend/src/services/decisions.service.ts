@@ -9,6 +9,7 @@ import type { Order, OrderStatus, RoutingDecisionStatus } from '../generated/pri
 import { toOrder } from '../mappers/order.mapper.js';
 import { toRoutingDecision } from '../mappers/routing-decision.mapper.js';
 import type { RoutingDecisionRecord } from '../models/routing-decisions.model.js';
+import { expireProposal, isOverdue } from '../operations/expire-proposal.js';
 
 // What a transaction below ended with. "expired" is not thrown as an error inside the
 // transaction, because that would roll back the expiry it just saved.
@@ -22,9 +23,10 @@ export async function approveDecision(decisionId: string): Promise<OrderDecision
     if (decision.status === 'APPROVED') return done(decision, order);
     requireProposed(decision, 'approved');
 
-    // Too late: the job would already have had to start. Expire it instead.
-    if (plannedStartHasPassed(decision)) {
-      await expire(tx, decision, order);
+    // Too late: the job would already have had to start. Expire it instead. The dispatcher
+    // expires overdue proposals on its own too; both hold the order's lock, so only one does.
+    if (isOverdue(decision, getClock().now())) {
+      await expireProposal(tx, decision, order);
       return { kind: 'expired' };
     }
 
@@ -141,19 +143,6 @@ async function requireBookedOnAvailableMachine(
         'Reject it and route the order again.',
     );
   }
-}
-
-function plannedStartHasPassed(decision: RoutingDecisionRecord): boolean {
-  const now = getClock().now();
-
-  return decision.jobs.some((job) => job.status === 'PLANNED' && job.plannedStart <= now);
-}
-
-// A proposal nobody approved in time: the same effect as a rejection, without a reason.
-async function expire(tx: Models, decision: RoutingDecisionRecord, order: Order): Promise<void> {
-  await changeDecisionStatus(tx, decision, 'EXPIRED');
-  await tx.jobs.changeStatusForDecision(decision.id, 'PLANNED', 'CANCELLED');
-  await changeOrderStatus(tx, order, 'DRAFT');
 }
 
 async function changeDecisionStatus(

@@ -30,6 +30,20 @@ export async function findInconsistencies(): Promise<string[]> {
     problems.push(`Job ${job.id} is still active on failed machine ${job.machineId}`);
   }
 
+  // A broken machine is never told to start work: failure handling cancels its open
+  // START_JOBs, and the dispatcher doesn't queue one for a machine that isn't IDLE.
+  const startsOnBroken = await prisma.command.findMany({
+    where: {
+      type: 'START_JOB',
+      status: { in: ['PENDING', 'DELIVERED'] },
+      machine: { status: { in: ['ERROR', 'OFFLINE'] } },
+    },
+    select: { id: true, machineId: true },
+  });
+  for (const command of startsOnBroken) {
+    problems.push(`START_JOB ${command.id} is still open for failed machine ${command.machineId}`);
+  }
+
   const orders = await prisma.order.findMany({
     include: {
       routingDecisions: {

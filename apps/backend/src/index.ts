@@ -1,4 +1,5 @@
 import { createApp } from './app.js';
+import { DISPATCH_INTERVAL_MS, runDispatcher } from './background/dispatcher.js';
 import { startLoop } from './background/loop.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
@@ -50,11 +51,15 @@ const blockedOrderRetry = startLoop(
   { intervalMs: BLOCKED_ORDER_RETRY_INTERVAL_MS },
 );
 
+// Expires proposals nobody approved in time, and queues START_JOB when an approved job's
+// planned start arrives (background/dispatcher.ts).
+const dispatcher = startLoop('dispatcher', runDispatcher, { intervalMs: DISPATCH_INTERVAL_MS });
+
 function shutdown(signal: NodeJS.Signals): void {
   logger.info({ signal }, 'Shutting down');
 
   server.close(() => {
-    Promise.all([heartbeatMonitor.stop(), blockedOrderRetry.stop()])
+    Promise.all([heartbeatMonitor.stop(), blockedOrderRetry.stop(), dispatcher.stop()])
       .then(() => prisma.$disconnect())
       .then(
         () => process.exit(0),
