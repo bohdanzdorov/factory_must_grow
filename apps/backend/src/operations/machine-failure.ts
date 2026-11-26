@@ -13,7 +13,9 @@ export type FailureReason =
   // The machine reported MACHINE_FAILURE: it becomes ERROR.
   | { type: 'REPORTED' }
   // No heartbeat since `lastHeartbeatBefore`: it becomes OFFLINE.
-  | { type: 'SILENT'; lastHeartbeatBefore: Date };
+  | { type: 'SILENT'; lastHeartbeatBefore: Date }
+  // An operator set its site DOWN: it becomes OFFLINE.
+  | { type: 'SITE_DOWN'; siteId: string };
 
 // Marks the machine as failed and moves its work elsewhere: its jobs are freed, and each
 // affected order gets a reroute proposal (REROUTE_PENDING) or is BLOCKED with a reason.
@@ -30,7 +32,7 @@ export async function handleMachineFailure(
   const newStatus = await markFailed(tx, machineId, reason);
   if (newStatus === null) return false;
 
-  await moveWorkOffMachine(tx, machineId, newStatus);
+  await moveWorkOffMachine(tx, machineId, newStatus, explain(machineId, newStatus, reason));
   return true;
 }
 
@@ -52,6 +54,17 @@ async function markFailed(
     return 'ERROR';
   }
 
+  if (reason.type === 'SITE_DOWN') {
+    // From IDLE or RUNNING. A machine in ERROR stays ERROR: it still needs a reset.
+    const changed = await tx.machines.changeStatus(machineId, {
+      from: WORKING_STATUSES,
+      to: 'OFFLINE',
+    });
+    if (!changed) return null;
+    logger.warn({ machineId, siteId: reason.siteId }, 'Site went down; machine now OFFLINE');
+    return 'OFFLINE';
+  }
+
   // From IDLE or RUNNING only, and only if it is still silent. A machine in ERROR that goes
   // quiet stays ERROR: it is already unavailable, and ERROR ends with MACHINE_RESET.
   const changed = await tx.machines.changeStatus(machineId, {
@@ -64,11 +77,20 @@ async function markFailed(
   return 'OFFLINE';
 }
 
+// The sentence that starts each reroute's explanation (and a blocked order's reason).
+function explain(machineId: string, newStatus: MachineStatus, reason: FailureReason): string {
+  if (reason.type === 'SITE_DOWN') {
+    return `Machine ${machineId} failed (${newStatus}): site ${reason.siteId} is down.`;
+  }
+  return `Machine ${machineId} failed (${newStatus}).`;
+}
+
 // Steps 2 to 5: free the machine's jobs and reroute the orders they belonged to.
 async function moveWorkOffMachine(
   tx: Models,
   machineId: string,
   newStatus: MachineStatus,
+  explanation: string,
 ): Promise<void> {
   const now = getClock().now();
 
@@ -131,7 +153,7 @@ async function moveWorkOffMachine(
     const proposal = await proposeRoute(tx, order, {
       kind: 'REROUTE',
       supersedesId: replacedDecisionByOrder.get(order.id) ?? null,
-      reason: `Machine ${machineId} failed (${newStatus}).`,
+      reason: explanation,
     });
 
     const to: OrderStatus = proposal.booked ? 'REROUTE_PENDING' : 'BLOCKED';

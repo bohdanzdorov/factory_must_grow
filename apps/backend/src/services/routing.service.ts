@@ -38,11 +38,14 @@ async function routeOnce(tx: Models, orderId: string): Promise<OrderDecisionResu
     ? await tx.orders.updateStatus(orderId, 'ROUTED', null)
     : await tx.orders.updateStatus(orderId, 'BLOCKED', proposal.explanation);
 
-  // Read back, so the response includes the job created inside proposeRoute.
-  const saved = await tx.routingDecisions.findById(proposal.decisionId);
+  // Read back, so the response includes the job created inside proposeRoute. Routing by hand
+  // always saves a decision, even when no machine fits.
+  const saved = proposal.decisionId
+    ? await tx.routingDecisions.findById(proposal.decisionId)
+    : null;
   if (!saved) {
     throw new Error(
-      `Routing decision ${proposal.decisionId} disappeared inside its own transaction`,
+      `Routing decision ${String(proposal.decisionId)} was not saved inside its own transaction`,
     );
   }
 

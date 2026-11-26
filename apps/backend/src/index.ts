@@ -3,10 +3,14 @@ import { startLoop } from './background/loop.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { prisma } from './config/prisma.js';
+import { retryBlockedOrdersIfRequested } from './operations/blocked-orders.js';
 import {
   HEARTBEAT_CHECK_INTERVAL_MS,
   markSilentMachinesOffline,
 } from './background/heartbeat-monitor.js';
+
+// How often the blocked-order retry checks whether a retry was asked for, in real ms.
+const BLOCKED_ORDER_RETRY_INTERVAL_MS = 1_000;
 
 const server = createApp().listen(env.PORT, (err) => {
   if (err) {
@@ -31,12 +35,20 @@ const heartbeatMonitor = startLoop(
   },
 );
 
+// Retries BLOCKED orders shortly after a machine comes back (operations/blocked-orders.ts).
+const blockedOrderRetry = startLoop(
+  'blocked-order-retry',
+  async () => {
+    await retryBlockedOrdersIfRequested();
+  },
+  { intervalMs: BLOCKED_ORDER_RETRY_INTERVAL_MS },
+);
+
 function shutdown(signal: NodeJS.Signals): void {
   logger.info({ signal }, 'Shutting down');
 
   server.close(() => {
-    heartbeatMonitor
-      .stop()
+    Promise.all([heartbeatMonitor.stop(), blockedOrderRetry.stop()])
       .then(() => prisma.$disconnect())
       .then(
         () => process.exit(0),

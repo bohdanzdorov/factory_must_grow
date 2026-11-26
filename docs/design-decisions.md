@@ -6,16 +6,16 @@ Decisions made while designing the domain schema (W1-04). They refine or overrid
 
 Every request follows one path: **router → controller → service → models.**
 
-| Folder         | Holds                                                                                                   |
-| -------------- | ------------------------------------------------------------------------------------------------------- |
-| `routers/`     | One per controller: which URL calls which controller function                                           |
-| `controllers/` | One per service: reads the request, validates it, calls the service                                     |
-| `services/`    | One per controller, only the logic for its endpoints. **A service never calls another service.**        |
-| `operations/`  | Business steps shared by several services or background jobs (`propose-route.ts`, `machine-failure.ts`) |
-| `background/`  | Work that runs on a timer, not from a request (`heartbeat-monitor.ts`, and the `loop.ts` that runs it)  |
-| `models/`      | One per database table. A service may use several, because one action can touch several tables          |
-| `domain/`      | Pure logic with no database (routing, status rules, clock)                                              |
-| `config/`      | Environment, logging, the database client, `transaction()` and `inBookingTransaction()`                 |
+| Folder         | Holds                                                                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `routers/`     | One per controller: which URL calls which controller function                                                                                       |
+| `controllers/` | One per service: reads the request, validates it, calls the service                                                                                 |
+| `services/`    | One per controller, only the logic for its endpoints. **A service never calls another service.**                                                    |
+| `operations/`  | Business steps shared by several services or background jobs (`propose-route.ts`, `machine-failure.ts`, `machine-recovery.ts`, `blocked-orders.ts`) |
+| `background/`  | Work that runs on a timer, not from a request (`heartbeat-monitor.ts`, and the `loop.ts` that runs it)                                              |
+| `models/`      | One per database table. A service may use several, because one action can touch several tables                                                      |
+| `domain/`      | Pure logic with no database (routing, status rules, clock)                                                                                          |
+| `config/`      | Environment, logging, the database client, `transaction()` and `inBookingTransaction()`                                                             |
 
 ## Schema
 
@@ -140,7 +140,7 @@ A decision is decided exactly once: `PROPOSED` may become `APPROVED`, `REJECTED`
 - The exception is `START_JOB` on a busy machine: it waits, unconfirmed, until the machine is `IDLE`.
 - When a machine fails, its open `START_JOB` commands become `CANCELLED`; other commands stay (see "Failure handling").
 - The dispatcher waits until a machine is `IDLE` before starting its next job.
-- `MACHINE_RESET` is what makes a machine available again (W3-06), so recovery comes from an event that is safe to process twice, not from a heartbeat that happens to say `IDLE`.
+- `MACHINE_RESET` is what brings an `ERROR` machine back (see "Recovery"), so recovery from a breakdown comes from an event that is safe to process twice, not from a heartbeat that happens to say `IDLE`.
 
 ## Events
 
@@ -172,7 +172,7 @@ The two endpoints machines use. The request and response shapes are in `packages
 2. Return the machine's `PENDING` and `DELIVERED` commands, oldest first, and mark the `PENDING` ones `DELIVERED`.
 
 - `DELIVERED` means the command was handed out at least once, not that the machine got it; only its confirming event makes it `ACKED`. Until then it is sent with every heartbeat, so a lost response loses nothing.
-- **A heartbeat never changes `Machine.status`.** Status changes come from events, which are deduplicated and ordered. The reported `state` and `jobId` are checked but not used yet; W3-04 and W3-06 use them to spot a machine that comes back.
+- **A heartbeat changes `Machine.status` in one case only: it ends `OFFLINE`** (see "Recovery"). `OFFLINE` means "we stopped hearing from it", so hearing from it again is what ends it. Every other status change comes from events, which are deduplicated and ordered.
 - A stored command that doesn't match the shared schema is logged and skipped. A 500 would block every heartbeat from that machine, which would then be marked offline and have its work rerouted because of one bad row.
 - Successful heartbeats are not written to the request log (10 machines would add 10 lines a second); failed ones are.
 
@@ -230,7 +230,7 @@ The backend learns that a machine has failed in one of two ways, and both call t
 - Routing already skips `ERROR` and `OFFLINE` machines, so a failed machine gets no new work. Its existing jobs move elsewhere in the same transaction (see "Failure handling").
 - **`OFFLINE` → `ERROR`:** a machine we couldn't hear that comes back saying it is broken is broken.
 - **`ERROR` doesn't become `OFFLINE`** when it goes quiet: it is already unavailable, and recovery stays simple (`ERROR` ends with `MACHINE_RESET`, `OFFLINE` ends when heartbeats return).
-- **A machine that has never sent a heartbeat is not watched.** Seeded machines have no simulator until one is started; marking them all `OFFLINE` would leave routing with nothing, and nothing brings a machine back yet. To revisit once recovery exists.
+- **A new machine starts `OFFLINE`** (the database default) and its first heartbeat brings it to `IDLE`. A machine we have never heard from is not available, so after seeding, routing finds machines only once their simulators run.
 - **The timeout is 10 real seconds**, above the simulator's 5-second request timeout, so a slow backend doesn't mark healthy machines offline. It is converted to simulated time with the scale (10 simulated minutes at 60×), because `lastHeartbeatAt` is simulated time.
 - **The check runs in the background every 2 real seconds** (`background/heartbeat-monitor.ts`, started in `index.ts`). The first check waits one full timeout after the backend starts: after a restart every machine's last heartbeat looks old, and the simulators need a moment to get through again.
 - **A heartbeat arriving at the same moment wins.** The status change re-checks "still silent since the cutoff?" in the same `UPDATE`, so a machine whose heartbeat just landed is left alone.
@@ -259,10 +259,30 @@ Once a machine is marked failed, its work moves elsewhere in the same transactio
 - The transaction may run for up to 10 seconds (`config/database.ts`), plenty for ten machines.
 - A machine that failed midway restarts the full quantity elsewhere. Partial progress is not modeled in v1.
 
+## Recovery
+
+A failed machine comes back in one of two ways (`operations/machine-recovery.ts`):
+
+| What arrives                 | Machine was          | Becomes                                    |
+| ---------------------------- | -------------------- | ------------------------------------------ |
+| A new `MACHINE_RESET` event  | `ERROR` or `OFFLINE` | `IDLE`, or `OFFLINE` if its site is `DOWN` |
+| A heartbeat saying `IDLE`    | `OFFLINE`            | `IDLE`, if its site is `UP`                |
+| A heartbeat saying `ERROR`   | `OFFLINE`            | `ERROR` (its work moved when it went off)  |
+| A heartbeat saying `RUNNING` | `OFFLINE`            | stays `OFFLINE`                            |
+
+- **`RUNNING` keeps it `OFFLINE`:** it is still running a job that was moved elsewhere. Its queued `CANCEL_JOB` stops it, and the next heartbeat says `IDLE`.
+- **A reset on a `DOWN` site makes the machine `OFFLINE`, not `IDLE`:** it works, but can't take work until the site is back. Its first heartbeat after that brings it back.
+- **Blocked orders are retried after every recovery that makes a machine `IDLE`** (`operations/blocked-orders.ts`), most urgent deadline first. An order that fits now gets a normal proposal and becomes `ROUTED`; one that still fits nowhere stays `BLOCKED` and **nothing is saved for it**, so recoveries don't fill its history with identical "no eligible machine" decisions. "Try routing again" by hand still saves one.
+- **The retry runs in the background**, not inside the request that brought the machine back. A recovery usually happens inside a heartbeat, which must stay fast: a slow heartbeat looks like a dead machine. The recovery only asks for a retry (an in-memory flag), and a background loop checks every real second and does the routing. A request lost in a restart only means blocked orders wait for the next recovery.
+- Each blocked order is retried in its own transaction, so one order's trouble can't undo another's.
+
 ## Site down
 
-- An operator sets a site to `DOWN`. The backend sets all its machines to `OFFLINE` and handles the released work itself.
-- `FAIL` is best-effort and sent only to `RUNNING` machines, because a site that is really down cannot receive commands.
+`POST /api/sites/:id/status` with `{ "status": "DOWN" }` or `{ "status": "UP" }`. Setting the status a site already has changes nothing.
+
+- **`DOWN`:** every working machine at the site becomes `OFFLINE` and its work moves elsewhere, exactly as for a silent machine (see "Failure handling"), in one transaction. Reroutes explain it: "Machine HAM-1 failed (OFFLINE): site HAM is down." A machine in `ERROR` stays `ERROR`: it still needs a reset.
+- **No `FAIL` is sent** to the site's running machines. A machine that may have started a job already gets a `CANCEL_JOB` queued (the `OFFLINE` rule), which stops it if it can still be reached, without putting it into `ERROR`.
+- **`UP`:** the site is available again. Its machines come back on their next heartbeat (see "Recovery"), and each one coming back asks for blocked orders to be retried.
 - `Site.status` stays the gate for routing, so a machine's heartbeat cannot make it available while its site is down.
 
 ## Time

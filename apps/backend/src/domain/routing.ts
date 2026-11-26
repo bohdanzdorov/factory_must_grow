@@ -257,7 +257,8 @@ export function findEarliestGap(
 
     if (end <= candidate) continue;
     if (start >= candidate + durationMs) break;
-    candidate = Math.max(candidate, end);
+
+    candidate = end;
   }
 
   return candidate;

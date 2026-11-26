@@ -10,7 +10,8 @@ import type { Order, RoutingDecisionKind } from '../generated/prisma/client.js';
 import { toNewCandidates } from '../mappers/routing-decision.mapper.js';
 
 export interface ProposedRoute {
-  decisionId: string;
+  // Null only when no machine fits and saveWhenNoMachine was false: nothing was saved.
+  decisionId: string | null;
   // True if a machine was chosen and its slot booked; false if no machine fits.
   booked: boolean;
   explanation: string;
@@ -22,13 +23,20 @@ export interface ProposedRoute {
 //
 // `kind` and `supersedesId` say whether this is a first routing or a reroute, and which
 // decision it replaces. `reason`, if given, starts the explanation (why it was rerouted).
+// `saveWhenNoMachine: false` saves nothing when no machine fits (an automatic retry that
+// would otherwise add the same 'no eligible machine' decision again and again).
 //
 // Throws a booking conflict or ChosenMachineFailedError when something changed at the same
 // moment; run it inside inBookingTransaction, which routes again.
 export async function proposeRoute(
   tx: Models,
   order: Order,
-  options: { kind: RoutingDecisionKind; supersedesId: string | null; reason?: string },
+  options: {
+    kind: RoutingDecisionKind;
+    supersedesId: string | null;
+    reason?: string;
+    saveWhenNoMachine?: boolean;
+  },
 ): Promise<ProposedRoute> {
   const clock = getClock();
   const now = clock.now();
@@ -75,6 +83,10 @@ export async function proposeRoute(
   const explanation = options.reason
     ? `${options.reason} ${result.explanation}`
     : result.explanation;
+
+  if (!chosen && options.saveWhenNoMachine === false) {
+    return { decisionId: null, booked: false, explanation };
+  }
 
   const decision = await tx.routingDecisions.insert({
     orderId: order.id,

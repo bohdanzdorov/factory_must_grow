@@ -47,6 +47,14 @@ export function ordersModel(db: DbClient) {
       `;
     },
 
+    // The orders in this status, most urgent deadline first (id breaks ties).
+    findManyByStatusByDeadline(status: OrderStatus): Promise<Order[]> {
+      return db.order.findMany({
+        where: { status },
+        orderBy: [{ deadline: 'asc' }, { id: 'asc' }],
+      });
+    },
+
     // The orders with these ids, most urgent deadline first (id breaks ties).
     findManyByIdsByDeadline(ids: string[]): Promise<Order[]> {
       return db.order.findMany({

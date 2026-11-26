@@ -86,13 +86,15 @@ describe('POST /api/machines/:id/heartbeat', () => {
     expect(stored.lastHeartbeatAt).toEqual(new Date('2026-11-19T08:05:00.000Z'));
   });
 
-  it("doesn't change the machine's status", async () => {
-    const machine = await createMachine({ status: 'OFFLINE' });
+  // The one status a heartbeat changes is OFFLINE (see recovery.test.ts). ERROR only ends
+  // with a MACHINE_RESET event.
+  it("doesn't bring an ERROR machine back", async () => {
+    const machine = await createMachine({ status: 'ERROR' });
 
     await heartbeat(machine.id, { state: 'IDLE', jobId: null });
 
     const stored = await prisma.machine.findUniqueOrThrow({ where: { id: machine.id } });
-    expect(stored.status).toBe('OFFLINE');
+    expect(stored.status).toBe('ERROR');
   });
 
   it('returns no commands when there are none', async () => {

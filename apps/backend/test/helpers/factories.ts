@@ -52,6 +52,8 @@ export async function createMachine(
     data: {
       id: nextId('MACHINE'),
       name: 'Test machine',
+      // Tests start with a working machine; real machines start OFFLINE until heard from.
+      status: 'IDLE',
       ...fields,
       siteId,
       capabilities: { create: capabilities },

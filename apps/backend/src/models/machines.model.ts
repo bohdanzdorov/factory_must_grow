@@ -64,8 +64,7 @@ export function machinesModel(db: DbClient) {
       return count === 1;
     },
 
-    // Ids of working machines (IDLE or RUNNING) last heard from before `cutoff`. A machine
-    // that has never sent a heartbeat (lastHeartbeatAt is null) is not included.
+    // Ids of working machines (IDLE or RUNNING) last heard from before `cutoff`.
     async findSilentSince(cutoff: Date): Promise<string[]> {
       const machines = await db.machine.findMany({
         where: { status: { in: WORKING_STATUSES }, lastHeartbeatAt: { lt: cutoff } },
@@ -75,13 +74,19 @@ export function machinesModel(db: DbClient) {
       return machines.map((machine) => machine.id);
     },
 
-    // Sets the machine's status to `to`, but only if it is currently one of `from` (and, with
-    // `lastHeartbeatBefore`, only if it is still silent since then). Returns true if it changed.
-    // The condition is checked in the same UPDATE, so a heartbeat or status change that lands
-    // at the same moment is never overwritten.
+    // Sets the machine's status to `to`, but only if it is currently one of `from`. Optional
+    // extra conditions: `lastHeartbeatBefore` (still silent since then), `siteUp` (its site is
+    // UP, or with false, DOWN). Returns true if it changed. The conditions are checked in the
+    // same UPDATE, so a heartbeat or status change that lands at the same moment is never
+    // overwritten.
     async changeStatus(
       id: string,
-      change: { from: MachineStatus[]; to: MachineStatus; lastHeartbeatBefore?: Date },
+      change: {
+        from: MachineStatus[];
+        to: MachineStatus;
+        lastHeartbeatBefore?: Date;
+        siteUp?: boolean;
+      },
     ): Promise<boolean> {
       const { count } = await db.machine.updateMany({
         where: {
@@ -90,10 +95,23 @@ export function machinesModel(db: DbClient) {
           ...(change.lastHeartbeatBefore === undefined
             ? {}
             : { lastHeartbeatAt: { lt: change.lastHeartbeatBefore } }),
+          ...(change.siteUp === undefined
+            ? {}
+            : { site: { status: change.siteUp ? 'UP' : 'DOWN' } }),
         },
         data: { status: change.to },
       });
       return count === 1;
+    },
+
+    // Ids of the site's machines.
+    async findIdsBySite(siteId: string): Promise<string[]> {
+      const machines = await db.machine.findMany({
+        where: { siteId },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+      });
+      return machines.map((machine) => machine.id);
     },
   };
 }

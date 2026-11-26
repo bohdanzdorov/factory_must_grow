@@ -62,6 +62,8 @@ Requires Node.js 22.13+ and Docker Desktop.
 
    It sends a heartbeat every second, carries out the commands it gets back, and reports job and failure events. It reads simulated time from the API, so it can be started before or after it. It reads `SIM_API_URL` and `INGEST_TOKEN` from `apps/simulator/.env`; `--api <url>` overrides the URL. Successful heartbeats are not logged by the API, so its log stays readable with many machines running.
 
+   Machines start OFFLINE after seeding and come online with their first heartbeat, so routing only uses machines whose simulator is running.
+
 ## Running tests
 
 With PostgreSQL running (`npm run db:up`):

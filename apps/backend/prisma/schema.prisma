@@ -130,7 +130,8 @@ model Machine {
   id              String        @id
   siteId          String        @map("site_id")
   name            String
-  status          MachineStatus @default(IDLE)
+  // OFFLINE until its first heartbeat: a machine we have never heard from is not available.
+  status          MachineStatus @default(OFFLINE)
   lastHeartbeatAt DateTime?     @map("last_heartbeat_at") @db.Timestamptz(3)
   lastSeq         BigInt        @default(0) @map("last_seq")
 

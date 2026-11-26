@@ -2,6 +2,7 @@
 // See "Ingest API" in docs/design-decisions.md.
 import type {
   CommandType,
+  HeartbeatRequest,
   HeartbeatResponse,
   MachineCommand,
   MachineEventRequest,
@@ -13,7 +14,9 @@ import { inBookingTransaction, transaction, type Models } from '../config/databa
 import { logger } from '../config/logger.js';
 import { HttpError } from '../errors/http-error.js';
 import { toMachineCommand } from '../mappers/command.mapper.js';
+import { requestBlockedOrderRetry } from '../operations/blocked-orders.js';
 import { handleMachineFailure } from '../operations/machine-failure.js';
+import { handleMachineRecovery } from '../operations/machine-recovery.js';
 
 // The command each event confirms. Job commands are matched by their jobId too.
 const CONFIRMS: Record<MachineEventType, CommandType | null> = {
@@ -27,13 +30,23 @@ const JOB_COMMANDS: CommandType[] = ['START_JOB', 'CANCEL_JOB'];
 
 // Records the heartbeat and returns the machine's unconfirmed commands, oldest first.
 // Commands are sent on every heartbeat until their event arrives, so a lost response loses
-// nothing. The machine's status is not changed here: status changes come from events.
-export async function recordHeartbeat(machineId: string): Promise<HeartbeatResponse> {
-  return transaction(async (tx) => {
+// nothing. The only status change a heartbeat makes is ending OFFLINE (see
+// operations/machine-recovery.ts): OFFLINE means we stopped hearing from the machine, so
+// hearing from it again is what ends it. Every other status change comes from events.
+export async function recordHeartbeat(
+  machineId: string,
+  report: HeartbeatRequest,
+): Promise<HeartbeatResponse> {
+  const { response, backOnline } = await transaction(async (tx) => {
     const found = await tx.machines.recordHeartbeat(machineId, getClock().now());
     if (!found) {
       throw new HttpError(404, `Machine not found: ${machineId}`);
     }
+
+    const back = await handleMachineRecovery(tx, machineId, {
+      type: 'HEARTBEAT',
+      reported: report.state,
+    });
 
     const commands: MachineCommand[] = [];
     const newlyDelivered: string[] = [];
@@ -52,18 +65,23 @@ export async function recordHeartbeat(machineId: string): Promise<HeartbeatRespo
 
     await tx.commands.markDelivered(newlyDelivered);
 
-    return { commands };
+    return { response: { commands }, backOnline: back };
   });
+
+  // Retried in the background, after this transaction is saved, so the heartbeat stays fast.
+  if (backOnline) requestBlockedOrderRetry();
+  return response;
 }
 
 // Stores the event once, acknowledges the command it confirms, and, if it is the newest event
-// from the machine so far, applies what it means: MACHINE_FAILURE marks the machine ERROR.
+// from the machine so far, applies what it means: MACHINE_FAILURE marks the machine ERROR,
+// MACHINE_RESET brings it back.
 export async function receiveEvent(
   machineId: string,
   event: MachineEventRequest,
 ): Promise<MachineEventResponse> {
   // A failure reroutes orders, which books jobs: retried if a booking clashes at the same moment.
-  return inBookingTransaction(
+  const { response, backOnline } = await inBookingTransaction(
     async (tx) => {
       if (!(await tx.machines.exists(machineId))) {
         throw new HttpError(404, `Machine not found: ${machineId}`);
@@ -86,7 +104,7 @@ export async function receiveEvent(
       });
       if (!stored) {
         // Already processed when it first arrived; doing it again would apply it twice.
-        return { result: 'DUPLICATE' };
+        return done('DUPLICATE');
       }
 
       // 3. The event is a receipt for its command. That stays true whatever order events
@@ -96,7 +114,7 @@ export async function receiveEvent(
       // 4. The event is also news about the machine. A stale event's news is out of date, and
       //    applying it would overwrite newer state (rule 7), so it stops here.
       if (!newest) {
-        return { result: 'STALE' };
+        return done('STALE');
       }
 
       // 5. Apply the event's news. Job events (JOB_STARTED, JOB_COMPLETED) come later.
@@ -104,11 +122,23 @@ export async function receiveEvent(
         // Marks the machine ERROR and moves its work to other machines.
         await handleMachineFailure(tx, machineId, { type: 'REPORTED' });
       }
+      if (event.type === 'MACHINE_RESET') {
+        // Brings a broken machine back.
+        return done('STORED', await handleMachineRecovery(tx, machineId, { type: 'RESET' }));
+      }
 
-      return { result: 'STORED' };
+      return done('STORED');
     },
     { machineId, eventId: event.eventId },
   );
+
+  // Retried in the background, after this transaction is saved.
+  if (backOnline) requestBlockedOrderRetry();
+  return response;
+}
+
+function done(result: MachineEventResponse['result'], backOnline = false) {
+  return { response: { result }, backOnline };
 }
 
 // Marks the command this event confirms as ACKED; see CONFIRMS.
