@@ -3,6 +3,7 @@
 import { getClock } from '../config/clock.js';
 import { db, inBookingTransaction } from '../config/database.js';
 import { env } from '../config/env.js';
+import { requestBlockedOrderRetry } from '../operations/blocked-orders.js';
 import { handleMachineFailure } from '../operations/machine-failure.js';
 
 // How often the check runs, in real milliseconds.
@@ -30,6 +31,9 @@ export async function markSilentMachinesOffline(): Promise<string[]> {
     );
     if (changed) marked.push(machineId);
   }
+
+  // Their orders wait for a new machine; they are rerouted in the background.
+  if (marked.length > 0) requestBlockedOrderRetry();
 
   return marked;
 }

@@ -3,7 +3,12 @@
 // database is checked for consistency after every round, not just the responses.
 import { OrderDecisionResultSchema } from '@factorymustgrow/shared';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { env } from '../src/config/env.js';
 import { prisma } from '../src/config/prisma.js';
+import {
+  retryBlockedOrders,
+  retryBlockedOrdersIfRequested,
+} from '../src/operations/blocked-orders.js';
 import { api } from './helpers/api.js';
 import { useManualClock } from './helpers/clock.js';
 import { findInconsistencies } from './helpers/consistency.js';
@@ -177,6 +182,58 @@ describe('routing, approving and rejecting at the same moment', STRESS, () => {
       expect(unexpectedResponses(responses.slice(0, 6), [200])).toEqual([]);
       expect(unexpectedResponses(responses.slice(6), [201, 409])).toEqual([]);
       await expectConsistent();
+    }
+  });
+});
+
+describe('a machine failing while orders are routed, approved and rerouted', STRESS, () => {
+  it('leaves no work on the failed machine and every order consistent', async () => {
+    await createNetwork(['HAM', 'LON'], 2);
+    const machines = ['HAM-1', 'HAM-2', 'LON-1', 'LON-2'];
+    let seq = 1;
+
+    for (let round = 0; round < ROUNDS; round++) {
+      const failing = machines[round % machines.length] ?? 'HAM-1';
+
+      // Proposals spread over the machines, created one by one so they all succeed.
+      const proposals = [];
+      for (let i = 0; i < 6; i++) {
+        const order = await createOrder();
+        const res = await api().post(`/api/orders/${order.id}/route`);
+        proposals.push(OrderDecisionResultSchema.parse(res.body));
+      }
+      const newOrders = [];
+      for (let i = 0; i < 4; i++) newOrders.push(await createOrder());
+
+      // All at once: approve the proposals, route new orders, reroute whatever is waiting,
+      // and fail one machine in the middle of it.
+      const failure = {
+        eventId: crypto.randomUUID(),
+        seq: seq++,
+        type: 'MACHINE_FAILURE',
+        payload: {},
+      };
+      const [failed, ...responses] = await Promise.all([
+        api()
+          .post(`/api/machines/${failing}/events`)
+          .set('Authorization', `Bearer ${env.INGEST_TOKEN}`)
+          .send(failure),
+        ...proposals.map(({ decision }) => api().post(`/api/decisions/${decision.id}/approve`)),
+        ...newOrders.map((order) => api().post(`/api/orders/${order.id}/route`)),
+        retryBlockedOrders().then(() => undefined),
+      ]);
+      // The orders freed by the failure get their reroute, as the background loop would.
+      await retryBlockedOrdersIfRequested();
+
+      expect(unexpectedResponses([failed], [200, 409])).toEqual([]);
+      // An approval can lose to the failure (409: its machine just failed).
+      expect(unexpectedResponses(responses.slice(0, 6), [200, 409])).toEqual([]);
+      expect(unexpectedResponses(responses.slice(6, 10), [201, 409])).toEqual([]);
+      // Includes: no PLANNED or RUNNING job is left on the failed machine.
+      await expectConsistent();
+
+      // Repaired for the next round.
+      await prisma.machine.update({ where: { id: failing }, data: { status: 'IDLE' } });
     }
   });
 });

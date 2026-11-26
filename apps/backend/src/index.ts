@@ -3,7 +3,10 @@ import { startLoop } from './background/loop.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { prisma } from './config/prisma.js';
-import { retryBlockedOrdersIfRequested } from './operations/blocked-orders.js';
+import {
+  requestBlockedOrderRetry,
+  retryBlockedOrdersIfRequested,
+} from './operations/blocked-orders.js';
 import {
   HEARTBEAT_CHECK_INTERVAL_MS,
   markSilentMachinesOffline,
@@ -35,7 +38,10 @@ const heartbeatMonitor = startLoop(
   },
 );
 
-// Retries BLOCKED orders shortly after a machine comes back (operations/blocked-orders.ts).
+// Reroutes BLOCKED orders shortly after a machine fails or comes back
+// (operations/blocked-orders.ts). Asked for once at startup too: a request made just before a
+// restart is kept only in memory, and orders left waiting must not stay waiting.
+requestBlockedOrderRetry();
 const blockedOrderRetry = startLoop(
   'blocked-order-retry',
   async () => {

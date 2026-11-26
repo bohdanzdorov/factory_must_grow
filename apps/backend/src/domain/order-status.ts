@@ -7,8 +7,9 @@ import type { OrderStatus, RoutingDecisionStatus } from '../generated/prisma/enu
 const orderTransitions: Record<OrderStatus, readonly OrderStatus[]> = {
   // Routing finds a machine, or finds none.
   DRAFT: ['ROUTED', 'BLOCKED'],
-  // Retried by hand or after a machine recovers; may still find nothing.
-  BLOCKED: ['ROUTED', 'BLOCKED'],
+  // Routed again, by hand or by the blocked-order retry: a first proposal, or a reroute for an
+  // order whose machine failed. May still find nothing.
+  BLOCKED: ['ROUTED', 'REROUTE_PENDING', 'BLOCKED'],
   // Approved; rejected or expired (back to DRAFT); or the proposed machine fails first.
   ROUTED: ['APPROVED', 'DRAFT', 'REROUTE_PENDING', 'BLOCKED'],
   // The job starts; or the machine fails before it does.

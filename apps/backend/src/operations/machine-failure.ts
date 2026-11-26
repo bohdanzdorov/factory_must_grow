@@ -5,9 +5,8 @@ import { getClock } from '../config/clock.js';
 import type { Models } from '../config/database.js';
 import { logger } from '../config/logger.js';
 import { canChangeOrderStatus } from '../domain/order-status.js';
-import type { MachineStatus, OrderStatus } from '../generated/prisma/client.js';
+import type { MachineStatus } from '../generated/prisma/client.js';
 import { WORKING_STATUSES } from '../models/machines.model.js';
-import { proposeRoute } from './propose-route.js';
 
 export type FailureReason =
   // The machine reported MACHINE_FAILURE: it becomes ERROR.
@@ -17,13 +16,14 @@ export type FailureReason =
   // An operator set its site DOWN: it becomes OFFLINE.
   | { type: 'SITE_DOWN'; siteId: string };
 
-// Marks the machine as failed and moves its work elsewhere: its jobs are freed, and each
-// affected order gets a reroute proposal (REROUTE_PENDING) or is BLOCKED with a reason.
+// Marks the machine as failed and frees its work: its jobs are released or cancelled, and each
+// affected order becomes BLOCKED until the blocked-order retry reroutes it.
 // Returns true if the machine's status changed, false if there was nothing to do (it was
 // already failed, or a heartbeat arrived just in time). Safe to call twice: the second call
 // finds the machine already failed and does nothing.
 //
-// Books jobs, so run it inside inBookingTransaction (config/database.ts).
+// When it returns true, the caller must call requestBlockedOrderRetry() once the transaction
+// is saved, so the orders get rerouted.
 export async function handleMachineFailure(
   tx: Models,
   machineId: string,
@@ -85,7 +85,7 @@ function explain(machineId: string, newStatus: MachineStatus, reason: FailureRea
   return `Machine ${machineId} failed (${newStatus}).`;
 }
 
-// Steps 2 to 5: free the machine's jobs and reroute the orders they belonged to.
+// Steps 2 to 5: free the machine's jobs and leave their orders waiting for a new machine.
 async function moveWorkOffMachine(
   tx: Models,
   machineId: string,
@@ -145,26 +145,23 @@ async function moveWorkOffMachine(
   // step 3, which needs to see which START_JOBs were already handed out.
   await tx.commands.cancelOpen(machineId, 'START_JOB');
 
-  // Step 5: reroute each order, most urgent deadline first, so it gets the first free slot.
-  // Routing skips this machine on its own: it is ERROR or OFFLINE now.
-  const orders = await tx.orders.findManyByIdsByDeadline([...replacedDecisionByOrder.keys()]);
-
-  for (const order of orders) {
-    const proposal = await proposeRoute(tx, order, {
-      kind: 'REROUTE',
-      supersedesId: replacedDecisionByOrder.get(order.id) ?? null,
-      reason: explanation,
-    });
-
-    const to: OrderStatus = proposal.booked ? 'REROUTE_PENDING' : 'BLOCKED';
-    if (!canChangeOrderStatus(order.status, to)) {
-      throw new Error(`Order ${order.id} is ${order.status} and cannot become ${to}`);
+  // Step 5: the orders now wait for a new machine. They are BLOCKED, with the failure as the
+  // reason, until the blocked-order retry (operations/blocked-orders.ts) reroutes them one by
+  // one, each in its own short transaction. Rerouting here instead would keep every affected
+  // order locked for the whole time, and one booking clash would redo all of them. BLOCKED is
+  // safe if the backend stops halfway: an order not yet rerouted is still BLOCKED, so the next
+  // retry picks it up. The caller asks for that retry once this transaction is saved.
+  for (const orderId of replacedDecisionByOrder.keys()) {
+    const order = await tx.orders.findById(orderId);
+    if (!order) continue;
+    if (!canChangeOrderStatus(order.status, 'BLOCKED')) {
+      throw new Error(`Order ${order.id} is ${order.status} and cannot become BLOCKED`);
     }
-    await tx.orders.updateStatus(order.id, to, proposal.booked ? null : proposal.explanation);
-
-    logger.info(
-      { orderId: order.id, machineId, outcome: to, decisionId: proposal.decisionId },
-      proposal.booked ? 'Order rerouted; waiting for approval' : 'Order blocked; no machine fits',
-    );
+    await tx.orders.updateStatus(order.id, 'BLOCKED', explanation);
   }
+
+  logger.info(
+    { machineId, orders: replacedDecisionByOrder.size },
+    'Work released; orders wait to be rerouted',
+  );
 }

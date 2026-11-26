@@ -120,15 +120,15 @@ Implemented as a pure function, `routeOrder` in `apps/backend/src/domain/routing
 
 `domain/order-status.ts` lists every allowed status change, and every service checks it before saving. An impossible change, such as `COMPLETE` back to `DRAFT`, is refused with 409 wherever it is attempted.
 
-| Order status      | May become                                        | Triggered by                                      |
-| ----------------- | ------------------------------------------------- | ------------------------------------------------- |
-| `DRAFT`           | `ROUTED`, `BLOCKED`                               | Routing                                           |
-| `BLOCKED`         | `ROUTED`, `BLOCKED`                               | Retrying by hand, or after a machine recovers     |
-| `ROUTED`          | `APPROVED`; `DRAFT`; `REROUTE_PENDING`, `BLOCKED` | Approve; reject or expire; proposed machine fails |
-| `APPROVED`        | `IN_PRODUCTION`; `REROUTE_PENDING`, `BLOCKED`     | Job starts; machine fails                         |
-| `IN_PRODUCTION`   | `COMPLETE`; `REROUTE_PENDING`, `BLOCKED`          | Job completes; machine fails mid-job              |
-| `REROUTE_PENDING` | `APPROVED`; `DRAFT`; `REROUTE_PENDING`, `BLOCKED` | Approve; reject or expire; new machine fails too  |
-| `COMPLETE`        | nothing                                           | Final                                             |
+| Order status      | May become                                        | Triggered by                                                                                                 |
+| ----------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `DRAFT`           | `ROUTED`, `BLOCKED`                               | Routing                                                                                                      |
+| `BLOCKED`         | `ROUTED`, `REROUTE_PENDING`, `BLOCKED`            | Routed again, by hand or by the blocked-order retry: a first proposal, or a reroute after its machine failed |
+| `ROUTED`          | `APPROVED`; `DRAFT`; `REROUTE_PENDING`, `BLOCKED` | Approve; reject or expire; proposed machine fails                                                            |
+| `APPROVED`        | `IN_PRODUCTION`; `REROUTE_PENDING`, `BLOCKED`     | Job starts; machine fails                                                                                    |
+| `IN_PRODUCTION`   | `COMPLETE`; `REROUTE_PENDING`, `BLOCKED`          | Job completes; machine fails mid-job                                                                         |
+| `REROUTE_PENDING` | `APPROVED`; `DRAFT`; `REROUTE_PENDING`, `BLOCKED` | Approve; reject or expire; new machine fails too                                                             |
+| `COMPLETE`        | nothing                                           | Final                                                                                                        |
 
 A decision is decided exactly once: `PROPOSED` may become `APPROVED`, `REJECTED`, `EXPIRED` or `SUPERSEDED`, and every other decision status is final.
 
@@ -239,7 +239,12 @@ The backend learns that a machine has failed in one of two ways, and both call t
 
 ## Failure handling
 
-Once a machine is marked failed, its work moves elsewhere in the same transaction (`handleMachineFailure` in `operations/machine-failure.ts`). For a failure event, that transaction also stores the event, so a duplicate stops before any of this.
+A failure is handled in two parts:
+
+- **One short transaction frees the work** (`handleMachineFailure` in `operations/machine-failure.ts`, steps 1 to 5 below). For a failure event, it also stores the event, so a duplicate stops before any of this.
+- **Then each affected order is rerouted in its own transaction**, by the blocked-order retry (`operations/blocked-orders.ts`), in the background a moment later (step 6).
+
+**Why not one transaction for everything:** rerouting all of a machine's orders in one go keeps every one of them locked the whole time, and one booking clash with another request rolls back and redoes all of them. A machine with 50 orders would mean a transaction of seconds, likely to clash and to hit the timeout. Small transactions lock one order at a time, and a clash only redoes that order. The price is a moment where an order has lost its job but has no new proposal yet. It is `BLOCKED` in that moment, which is safe: if the backend stops halfway, the orders not yet rerouted are still `BLOCKED`, and the next retry (asked for at startup too) picks them up.
 
 1. **Status:** the machine becomes `ERROR` or `OFFLINE` (see "Failure detection"). If it was already failed, stop: this is what makes running it twice safe.
 2. **Lock the affected orders** (those with jobs on the machine), always in id order, so an approval or rejection at the same moment waits instead of clashing, and two failures can't deadlock. Then read the jobs again, in case one of those just changed them.
@@ -251,12 +256,16 @@ Once a machine is marked failed, its work moves elsewhere in the same transactio
 | a proposal (order `ROUTED` or `REROUTE_PENDING`)           | `CANCELLED` | `SUPERSEDED`         |
 
 4. **Cancel the machine's open `START_JOB` commands.** Only those: a queued `RESET` is how a broken machine comes back, and a queued `CANCEL_JOB` must still reach it. This comes after step 3, which needs to see which `START_JOB`s were already handed out.
-5. **Reroute each affected order, most urgent deadline first**, so it gets the first free slot. Routing skips the failed machine on its own. The new decision is `kind: REROUTE` with `supersedesId` pointing at the decision it replaces, and its explanation starts with the reason ("Machine HAM-1 failed (ERROR)."). A machine is found: the job is booked and the order becomes `REROUTE_PENDING`, waiting for approval (rule 8). None fits: the decision is `NO_ELIGIBLE_MACHINE` and the order becomes `BLOCKED` with that explanation as its reason. The released job is kept either way, so nothing is lost.
+5. **Each affected order becomes `BLOCKED`**, with the failure as its reason ("Machine HAM-1 failed (ERROR)."), and a retry is asked for once the transaction is saved.
+6. **The retry reroutes each order, most urgent deadline first**, so it gets the first free slot, one transaction per order. Routing skips the failed machine on its own. The new decision is `kind: REROUTE` with `supersedesId` pointing at the decision it replaces, and its explanation starts with the failure. A machine is found: the job is booked and the order becomes `REROUTE_PENDING`, waiting for approval (rule 8). None fits: the decision is `NO_ELIGIBLE_MACHINE` and the order stays `BLOCKED` with that explanation as its reason. The released job is kept either way, so nothing is lost.
 
+- **How the retry knows an order is a reroute** (`planNextRouting` in `operations/propose-route.ts`): the order is `BLOCKED`, and its open decision (one that no other decision replaces yet) is `APPROVED` or `SUPERSEDED`, meaning its job was freed by a failure. "Open" rather than "newest by `createdAt`": two decisions can be made in the same simulated millisecond, and then "newest" is a coin toss. "Try routing again" by hand uses the same rule, so it makes the same reroute.
+- **A reroute that crashes** (an unexpected error, not a clash) rolls back; the order stays `BLOCKED` and the retry asks for another run, so it isn't left waiting for some unrelated event. It asks at most 3 times in a row for the same order: one that crashes every time would otherwise be retried every second forever. After that it waits for the next failure, recovery or restart, each of which tries it once more.
 - **An `OFFLINE` machine may still be running** (it only lost its network). For each released job it may have started (the job was `RUNNING`, or its `START_JOB` was handed out), a `CANCEL_JOB` is queued straight away and goes out with the machine's first heartbeat when it reconnects. The simulator confirms a `CANCEL_JOB` even for a job it isn't running, so sending one is always safe. A machine in `ERROR` has already dropped its job.
-- **If a reroute booking clashes** with another request booking at the same moment, the whole transaction rolls back and runs again, up to 5 attempts, like routing (`inBookingTransaction` in `config/database.ts`). A failure event then answers 409 and the machine resends it; the monitor tries again on its next check.
+- **Known limitation: an `OFFLINE` machine can make the same order twice.** It doesn't know its job was moved, so it keeps working on it until its `CANCEL_JOB` arrives, which only happens when it reconnects. If the reroute is approved and starts in the meantime, both machines are making the order. Accepted for v1: the backend's data stays correct, because the old job is `RELEASED` and its late completion will change nothing (W3-10) (see "Still open" for the fix).
+- **If a reroute booking clashes** with another request booking at the same moment, that order's transaction rolls back and runs again, up to 5 attempts, like routing (`inBookingTransaction` in `config/database.ts`). Only that one order is redone.
 - **Routing never books on a machine that just failed.** Routing reads the machines without a lock, so the chosen one may have failed since. Just before booking, it locks the chosen machine's row and reads its status again; if it is now `ERROR` or `OFFLINE`, nothing is saved and routing runs again. The lock also makes a failure in progress on that machine finish first, so a job can't land on it after the failure has collected its jobs.
-- The transaction may run for up to 10 seconds (`config/database.ts`), plenty for ten machines.
+- A transaction may run for up to 10 seconds (`config/database.ts`); with one order per reroute transaction, that limit doesn't grow with the number of orders.
 - A machine that failed midway restarts the full quantity elsewhere. Partial progress is not modeled in v1.
 
 ## Recovery
@@ -272,15 +281,15 @@ A failed machine comes back in one of two ways (`operations/machine-recovery.ts`
 
 - **`RUNNING` keeps it `OFFLINE`:** it is still running a job that was moved elsewhere. Its queued `CANCEL_JOB` stops it, and the next heartbeat says `IDLE`.
 - **A reset on a `DOWN` site makes the machine `OFFLINE`, not `IDLE`:** it works, but can't take work until the site is back. Its first heartbeat after that brings it back.
-- **Blocked orders are retried after every recovery that makes a machine `IDLE`** (`operations/blocked-orders.ts`), most urgent deadline first. An order that fits now gets a normal proposal and becomes `ROUTED`; one that still fits nowhere stays `BLOCKED` and **nothing is saved for it**, so recoveries don't fill its history with identical "no eligible machine" decisions. "Try routing again" by hand still saves one.
-- **The retry runs in the background**, not inside the request that brought the machine back. A recovery usually happens inside a heartbeat, which must stay fast: a slow heartbeat looks like a dead machine. The recovery only asks for a retry (an in-memory flag), and a background loop checks every real second and does the routing. A request lost in a restart only means blocked orders wait for the next recovery.
+- **Blocked orders are retried after every recovery that makes a machine `IDLE`** (`operations/blocked-orders.ts`), most urgent deadline first, the same retry that reroutes a failed machine's orders (see "Failure handling"). An order that fits now gets a proposal: `ROUTED`, or `REROUTE_PENDING` if it was waiting for a reroute. One that still fits nowhere stays `BLOCKED`, and a "no eligible machine" decision is saved only if its open decision isn't one already, so recoveries don't fill its history with identical decisions. "Try routing again" by hand always saves one.
+- **The retry runs in the background**, not inside the request that brought the machine back. A recovery usually happens inside a heartbeat, which must stay fast: a slow heartbeat looks like a dead machine. The recovery only asks for a retry (an in-memory flag), and a background loop checks every real second and does the routing. The backend also asks for one when it starts, so a request lost in a restart is made up for straight away.
 - Each blocked order is retried in its own transaction, so one order's trouble can't undo another's.
 
 ## Site down
 
 `POST /api/sites/:id/status` with `{ "status": "DOWN" }` or `{ "status": "UP" }`. Setting the status a site already has changes nothing.
 
-- **`DOWN`:** every working machine at the site becomes `OFFLINE` and its work moves elsewhere, exactly as for a silent machine (see "Failure handling"), in one transaction. Reroutes explain it: "Machine HAM-1 failed (OFFLINE): site HAM is down." A machine in `ERROR` stays `ERROR`: it still needs a reset.
+- **`DOWN`:** every working machine at the site becomes `OFFLINE` and its work is freed in one transaction, exactly as for a silent machine; its orders are then rerouted one by one (see "Failure handling"). Reroutes explain it: "Machine HAM-1 failed (OFFLINE): site HAM is down." A machine in `ERROR` stays `ERROR`: it still needs a reset.
 - **No `FAIL` is sent** to the site's running machines. A machine that may have started a job already gets a `CANCEL_JOB` queued (the `OFFLINE` rule), which stops it if it can still be reached, without putting it into `ERROR`.
 - **`UP`:** the site is available again. Its machines come back on their next heartbeat (see "Recovery"), and each one coming back asks for blocked orders to be retried.
 - `Site.status` stays the gate for routing, so a machine's heartbeat cannot make it available while its site is down.
@@ -301,4 +310,4 @@ The demo runs on a simulated clock that is faster than real time, set by `CLOCK_
 
 ## Still open
 
-Nothing at the moment.
+- **A self-stopping lease for machines that lose contact.** This fixes the double work described under "Failure handling". A machine would stop its own job after about 8 real seconds without a successful heartbeat, which is shorter than the backend's 10-second `OFFLINE` timeout, and queue a `JOB_CANCELLED` event. By the time the backend calls the machine `OFFLINE` and moves its work, it has already stopped. This is how real machines guard against a lost network, but v1 leaves it out: the simulator's network outages are short, and the backend's data stays correct without it. Not built.

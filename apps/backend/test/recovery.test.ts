@@ -253,6 +253,8 @@ describe('POST /api/sites/:id/status', () => {
     const order = await approvedOrderOnHamburg();
 
     const res = await setSiteStatus('HAM', 'DOWN');
+    // Its orders are rerouted in the background.
+    await retryBlockedOrdersIfRequested();
 
     expect(res.status).toBe(200);
     expect(SiteSchema.parse(res.body)).toMatchObject({ id: 'HAM', status: 'DOWN' });

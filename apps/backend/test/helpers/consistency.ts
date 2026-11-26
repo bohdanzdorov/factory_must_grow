@@ -18,6 +18,18 @@ export async function findInconsistencies(): Promise<string[]> {
     problems.push(`Jobs ${overlap.a} and ${overlap.b} overlap on ${overlap.machine_id}`);
   }
 
+  // A broken machine holds no work: failure handling frees all of it.
+  const onBroken = await prisma.job.findMany({
+    where: {
+      status: { in: ['PLANNED', 'RUNNING'] },
+      machine: { status: { in: ['ERROR', 'OFFLINE'] } },
+    },
+    select: { id: true, machineId: true },
+  });
+  for (const job of onBroken) {
+    problems.push(`Job ${job.id} is still active on failed machine ${job.machineId}`);
+  }
+
   const orders = await prisma.order.findMany({
     include: {
       routingDecisions: {
@@ -50,16 +62,44 @@ export async function findInconsistencies(): Promise<string[]> {
       problems.push(`Order ${order.id} is ${order.status} but has an open proposal`);
     }
 
-    // A blocked order's newest decision explains why.
-    if (order.status === 'BLOCKED' && decisions[0]?.status !== 'NO_ELIGIBLE_MACHINE') {
-      problems.push(`Order ${order.id} is BLOCKED without a NO_ELIGIBLE_MACHINE decision`);
+    // A reroute always replaces an earlier decision of the same order.
+    const ids = new Set(decisions.map((decision) => decision.id));
+    for (const decision of decisions) {
+      if (
+        decision.kind === 'REROUTE' &&
+        (!decision.supersedesId || !ids.has(decision.supersedesId))
+      ) {
+        problems.push(`Reroute ${decision.id} doesn't replace a decision of order ${order.id}`);
+      }
     }
 
-    // An approved order's newest decision is approved and still holds its slot.
+    // Decisions nothing has replaced yet ("open"). Used instead of the newest by createdAt,
+    // which can tie when two decisions are made in the same simulated millisecond.
+    const replacedIds = new Set(decisions.map((decision) => decision.supersedesId));
+    const open = decisions.filter((decision) => !replacedIds.has(decision.id));
+
+    // A blocked order either has a decision saying no machine fits, or is waiting to be
+    // rerouted after its machine failed: its open decision is APPROVED or SUPERSEDED, with
+    // its job freed.
+    if (order.status === 'BLOCKED') {
+      const explained = open.some((decision) => decision.status === 'NO_ELIGIBLE_MACHINE');
+      const waitingForReroute = open.some(
+        (decision) =>
+          (decision.status === 'APPROVED' || decision.status === 'SUPERSEDED') &&
+          !decision.jobs.some((job) => job.status === 'PLANNED' || job.status === 'RUNNING'),
+      );
+      if (!explained && !waitingForReroute) {
+        problems.push(`Order ${order.id} is BLOCKED with no reason in its decisions`);
+      }
+    }
+
+    // An approved order has an open approved decision that still holds its slot.
     if (order.status === 'APPROVED') {
-      const newest = decisions[0];
-      const holdsSlot = newest?.jobs.some((job) => job.status === 'PLANNED') ?? false;
-      if (newest?.status !== 'APPROVED' || !holdsSlot) {
+      const booked = open.some(
+        (decision) =>
+          decision.status === 'APPROVED' && decision.jobs.some((job) => job.status === 'PLANNED'),
+      );
+      if (!booked) {
         problems.push(`Order ${order.id} is APPROVED without an approved, booked decision`);
       }
     }

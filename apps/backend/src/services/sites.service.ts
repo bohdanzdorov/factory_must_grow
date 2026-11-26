@@ -2,6 +2,7 @@ import type { Site, SiteDetail, UpdateSiteStatus } from '@factorymustgrow/shared
 import { db, inBookingTransaction, transaction } from '../config/database.js';
 import { HttpError } from '../errors/http-error.js';
 import { toSite, toSiteDetail } from '../mappers/site.mapper.js';
+import { requestBlockedOrderRetry } from '../operations/blocked-orders.js';
 import { handleMachineFailure } from '../operations/machine-failure.js';
 
 export async function listSites(): Promise<Site[]> {
@@ -24,19 +25,24 @@ export async function getSite(id: string): Promise<SiteDetail> {
 // docs/design-decisions.md. Setting the status it already has changes nothing.
 export async function setSiteStatus(id: string, input: UpdateSiteStatus): Promise<Site> {
   if (input.status === 'DOWN') {
-    // DOWN: every working machine at the site goes OFFLINE and its work moves elsewhere,
-    // all in one transaction. Rerouting books jobs, so it retries if a booking clashes.
-    await inBookingTransaction(
+    // DOWN: every working machine at the site goes OFFLINE and its work is freed, in one
+    // transaction. Its orders are rerouted in the background once that is saved.
+    const anyFailed = await inBookingTransaction(
       async (tx) => {
         await requireSite(tx.sites.findById(id), id);
-        if (!(await tx.sites.changeStatus(id, 'DOWN'))) return;
+        if (!(await tx.sites.changeStatus(id, 'DOWN'))) return false;
 
+        let failed = false;
         for (const machineId of await tx.machines.findIdsBySite(id)) {
-          await handleMachineFailure(tx, machineId, { type: 'SITE_DOWN', siteId: id });
+          if (await handleMachineFailure(tx, machineId, { type: 'SITE_DOWN', siteId: id })) {
+            failed = true;
+          }
         }
+        return failed;
       },
       { siteId: id },
     );
+    if (anyFailed) requestBlockedOrderRetry();
   } else {
     // UP: its machines come back on their next heartbeat (operations/machine-recovery.ts),
     // and each one coming back asks for blocked orders to be retried.

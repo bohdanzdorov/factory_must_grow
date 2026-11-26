@@ -7,6 +7,7 @@ import { env } from '../src/config/env.js';
 import { prisma } from '../src/config/prisma.js';
 import type { ManualClock } from '../src/domain/clock.js';
 import { markSilentMachinesOffline } from '../src/background/heartbeat-monitor.js';
+import { retryBlockedOrdersIfRequested } from '../src/operations/blocked-orders.js';
 import { api } from './helpers/api.js';
 import { useManualClock } from './helpers/clock.js';
 import {
@@ -56,7 +57,8 @@ async function approvedOrder(overrides: { deadline?: Date } = {}) {
   return { order, decision, jobId: decision.jobs[0]?.id ?? '' };
 }
 
-function reportFailure(machineId: string, event: Partial<MachineEventRequest> = {}) {
+// Sends MACHINE_FAILURE only: the work is freed and the orders wait, BLOCKED.
+function sendFailure(machineId: string, event: Partial<MachineEventRequest> = {}) {
   const body: MachineEventRequest = {
     eventId: randomUUID(),
     seq: seq++,
@@ -70,11 +72,22 @@ function reportFailure(machineId: string, event: Partial<MachineEventRequest> = 
     .send(body);
 }
 
-// Makes the machine look silent for longer than the heartbeat timeout, then runs the monitor.
+// Sends MACHINE_FAILURE, then runs the background retry that reroutes the waiting orders, as
+// the app's background loop does a moment later.
+async function reportFailure(machineId: string, event: Partial<MachineEventRequest> = {}) {
+  const res = await sendFailure(machineId, event);
+  await retryBlockedOrdersIfRequested();
+  return res;
+}
+
+// Makes the machine look silent for longer than the heartbeat timeout, then runs the monitor
+// and the background retry.
 async function goSilent(machineId: string) {
   await prisma.machine.update({ where: { id: machineId }, data: { lastHeartbeatAt: clock.now() } });
   clock.advance(10 * MINUTE + 1);
-  return markSilentMachinesOffline();
+  const marked = await markSilentMachinesOffline();
+  await retryBlockedOrdersIfRequested();
+  return marked;
 }
 
 const job = (id: string) => prisma.job.findUniqueOrThrow({ where: { id } });
@@ -353,5 +366,38 @@ describe('both ways of finding out, and running twice', () => {
       status: 'ERROR',
     });
     expect(await decisionsOf(o.id)).toHaveLength(2);
+  });
+});
+
+describe('between the failure and the reroute', () => {
+  it('leaves the order BLOCKED with the failure as its reason until the retry runs', async () => {
+    const { order: o, decision: old, jobId } = await approvedOrder();
+
+    await sendFailure('HAM-1');
+
+    expect(await job(jobId)).toMatchObject({ status: 'RELEASED' });
+    expect(await order(o.id)).toMatchObject({
+      status: 'BLOCKED',
+      blockedReason: 'Machine HAM-1 failed (ERROR).',
+    });
+    // Nothing new yet: the reroute is the retry's job.
+    expect(await decisionsOf(o.id)).toMatchObject([{ id: old.id, status: 'APPROVED' }]);
+
+    await retryBlockedOrdersIfRequested();
+
+    expect(await order(o.id)).toMatchObject({ status: 'REROUTE_PENDING', blockedReason: null });
+  });
+
+  it('a manual "Try routing again" in between makes the same reroute', async () => {
+    const { order: o, decision: old } = await approvedOrder();
+    await sendFailure('HAM-1');
+
+    const res = await api().post(`/api/orders/${o.id}/route`);
+
+    expect(res.status).toBe(201);
+    expect(OrderDecisionResultSchema.parse(res.body)).toMatchObject({
+      order: { status: 'REROUTE_PENDING' },
+      decision: { kind: 'REROUTE', supersedesId: old.id, chosenMachineId: 'LON-1' },
+    });
   });
 });

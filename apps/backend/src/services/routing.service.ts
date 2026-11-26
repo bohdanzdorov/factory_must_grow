@@ -6,7 +6,7 @@ import { canChangeOrderStatus } from '../domain/order-status.js';
 import { HttpError } from '../errors/http-error.js';
 import { toOrder } from '../mappers/order.mapper.js';
 import { toRoutingDecision } from '../mappers/routing-decision.mapper.js';
-import { proposeRoute } from '../operations/propose-route.js';
+import { planNextRouting, proposeRoute } from '../operations/propose-route.js';
 
 export async function routeOrder(orderId: string): Promise<OrderDecisionResult> {
   return inBookingTransaction((tx) => routeOnce(tx, orderId), { orderId });
@@ -24,18 +24,30 @@ async function routeOnce(tx: Models, orderId: string): Promise<OrderDecisionResu
     throw new HttpError(404, `Order not found: ${orderId}`);
   }
 
-  // Allowed exactly from DRAFT (first routing) and BLOCKED (retry), per the state machine.
-  if (!canChangeOrderStatus(order.status, 'ROUTED')) {
+  // A first routing, or (for an order whose machine failed) its reroute.
+  const plan = await planNextRouting(tx, order);
+
+  // Routing ends in one of two statuses: the plan's status if a machine is booked, BLOCKED if
+  // none fits. Both must be allowed from the order's status now, which is true exactly for
+  // DRAFT (first routing) and BLOCKED (retry), per the state machine.
+  if (
+    !canChangeOrderStatus(order.status, plan.statusWhenBooked) ||
+    !canChangeOrderStatus(order.status, 'BLOCKED')
+  ) {
     throw new HttpError(
       409,
       `Order ${orderId} is ${order.status}; only DRAFT or BLOCKED orders can be routed.`,
     );
   }
 
-  const proposal = await proposeRoute(tx, order, { kind: 'INITIAL', supersedesId: null });
+  const proposal = await proposeRoute(tx, order, {
+    kind: plan.kind,
+    supersedesId: plan.supersedesId,
+    reason: plan.reason,
+  });
 
   const updatedOrder = proposal.booked
-    ? await tx.orders.updateStatus(orderId, 'ROUTED', null)
+    ? await tx.orders.updateStatus(orderId, plan.statusWhenBooked, null)
     : await tx.orders.updateStatus(orderId, 'BLOCKED', proposal.explanation);
 
   // Read back, so the response includes the job created inside proposeRoute. Routing by hand

@@ -6,7 +6,7 @@ import type { Models } from '../config/database.js';
 import { env } from '../config/env.js';
 import { routeOrder as decideRoute } from '../domain/routing.js';
 import { ChosenMachineFailedError } from '../errors/routing-errors.js';
-import type { Order, RoutingDecisionKind } from '../generated/prisma/client.js';
+import type { Order, OrderStatus, RoutingDecisionKind } from '../generated/prisma/client.js';
 import { toNewCandidates } from '../mappers/routing-decision.mapper.js';
 
 export interface ProposedRoute {
@@ -116,4 +116,70 @@ export async function proposeRoute(
   }
 
   return { decisionId: decision.id, booked: chosen !== null, explanation };
+}
+
+export interface NextRouting {
+  kind: RoutingDecisionKind;
+  supersedesId: string | null;
+  // Starts the explanation: why the order is being rerouted.
+  reason?: string;
+  // The order's status when a machine is found.
+  statusWhenBooked: OrderStatus;
+  // The order is already BLOCKED by a "no eligible machine" decision, so finding nothing
+  // again needs no new decision.
+  alreadyExplained: boolean;
+}
+
+// What routing an order next means, from its decisions that nothing has replaced yet ("open"
+// decisions). Each reroute points at the decision it replaces (supersedesId), so the open end
+// of that chain is the live one. Not simply the newest by createdAt: two decisions can be made
+// in the same simulated millisecond, and then "newest" would be a coin toss.
+//
+// | Open decision                                | Next routing is                         |
+// | -------------------------------------------- | --------------------------------------- |
+// | APPROVED or SUPERSEDED, order BLOCKED        | a reroute after its machine failed      |
+// | NO_ELIGIBLE_MACHINE from a reroute           | another try at that reroute             |
+// | anything else, or none                       | a first routing (INITIAL → ROUTED)      |
+//
+// An order BLOCKED with an open APPROVED or SUPERSEDED decision is one whose machine failed:
+// its job was freed (operations/machine-failure.ts) and it waits for a new machine. Its reroute
+// links to that decision, and its explanation starts with the failure (the order's reason).
+export async function planNextRouting(tx: Models, order: Order): Promise<NextRouting> {
+  // Newest first.
+  const decisions = await tx.routingDecisions.findByOrderId(order.id);
+  const replacedIds = new Set(decisions.map((decision) => decision.supersedesId));
+  const open = decisions.filter((decision) => !replacedIds.has(decision.id));
+
+  const freedByFailure =
+    order.status === 'BLOCKED'
+      ? open.find((decision) => decision.status === 'APPROVED' || decision.status === 'SUPERSEDED')
+      : undefined;
+  if (freedByFailure) {
+    return {
+      kind: 'REROUTE',
+      supersedesId: freedByFailure.id,
+      reason: order.blockedReason ?? undefined,
+      statusWhenBooked: 'REROUTE_PENDING',
+      alreadyExplained: false,
+    };
+  }
+
+  const failedReroute = open.find(
+    (decision) => decision.status === 'NO_ELIGIBLE_MACHINE' && decision.kind === 'REROUTE',
+  );
+  if (failedReroute) {
+    return {
+      kind: 'REROUTE',
+      supersedesId: failedReroute.id,
+      statusWhenBooked: 'REROUTE_PENDING',
+      alreadyExplained: true,
+    };
+  }
+
+  return {
+    kind: 'INITIAL',
+    supersedesId: null,
+    statusWhenBooked: 'ROUTED',
+    alreadyExplained: open[0]?.status === 'NO_ELIGIBLE_MACHINE',
+  };
 }

@@ -80,8 +80,9 @@ export async function receiveEvent(
   machineId: string,
   event: MachineEventRequest,
 ): Promise<MachineEventResponse> {
-  // A failure reroutes orders, which books jobs: retried if a booking clashes at the same moment.
-  const { response, backOnline } = await inBookingTransaction(
+  // A failure locks the machine and then its orders, while routing locks an order and then a
+  // machine. At the same moment, the two can deadlock: run again if they do.
+  const { response, retryBlocked } = await inBookingTransaction(
     async (tx) => {
       if (!(await tx.machines.exists(machineId))) {
         throw new HttpError(404, `Machine not found: ${machineId}`);
@@ -119,8 +120,8 @@ export async function receiveEvent(
 
       // 5. Apply the event's news. Job events (JOB_STARTED, JOB_COMPLETED) come later.
       if (event.type === 'MACHINE_FAILURE') {
-        // Marks the machine ERROR and moves its work to other machines.
-        await handleMachineFailure(tx, machineId, { type: 'REPORTED' });
+        // Marks the machine ERROR and frees its work; its orders wait to be rerouted.
+        return done('STORED', await handleMachineFailure(tx, machineId, { type: 'REPORTED' }));
       }
       if (event.type === 'MACHINE_RESET') {
         // Brings a broken machine back.
@@ -132,13 +133,14 @@ export async function receiveEvent(
     { machineId, eventId: event.eventId },
   );
 
-  // Retried in the background, after this transaction is saved.
-  if (backOnline) requestBlockedOrderRetry();
+  // A failure leaves orders waiting for a new machine, and a reset may make room for blocked
+  // orders: both are rerouted in the background, after this transaction is saved.
+  if (retryBlocked) requestBlockedOrderRetry();
   return response;
 }
 
-function done(result: MachineEventResponse['result'], backOnline = false) {
-  return { response: { result }, backOnline };
+function done(result: MachineEventResponse['result'], retryBlocked = false) {
+  return { response: { result }, retryBlocked };
 }
 
 // Marks the command this event confirms as ACKED; see CONFIRMS.
